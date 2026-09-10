@@ -549,6 +549,11 @@ async function loadCityWeather() {
       const iconEl = button.querySelector<HTMLSpanElement>('.weather-icon')!;
       const tempEl = button.querySelector<HTMLSpanElement>('.temp')!;
       const weatherEl = button.querySelector<HTMLSpanElement>('.weather')!;
+      const windEl = button.querySelector<HTMLSpanElement>('.wind')!;
+      const windArrowEl = button.querySelector<SVGElement>('.wind-arrow')!;
+      const windValueEl = button.querySelector<HTMLSpanElement>('.wind-value')!;
+      const precipEl = button.querySelector<HTMLSpanElement>('.precip')!;
+      const precipValueEl = button.querySelector<HTMLSpanElement>('.precip-value')!;
       const name = button.dataset.name!;
       try {
         const { lat, lon } = button.dataset;
@@ -571,6 +576,22 @@ async function loadCityWeather() {
         weatherEl.textContent = weatherLabelFromCode(current.weathercode);
         iconEl.innerHTML = weatherModeIcon(weatherModeFromCode(current.weathercode));
 
+        // Point the arrow the same way the wind actually pushes the flow
+        // field (see applyWeatherToFlowField's flowBearing), not the raw
+        // meteorological "from" direction, so the icon and the hero
+        // animation agree with each other.
+        const flowBearing = (current.winddirection_10m + 180) % 360;
+        windArrowEl.style.transform = `rotate(${flowBearing}deg)`;
+        windValueEl.textContent = `${Math.round(current.windspeed_10m)}km/h`;
+
+        if (current.precipitation > 0.05) {
+          precipEl.hidden = false;
+          const roundedPrecip = Math.round(current.precipitation * 10) / 10;
+          precipValueEl.textContent = `${roundedPrecip}mm`;
+        } else {
+          precipEl.hidden = true;
+        }
+
         console.log(`[weather] ${name}:`, {
           temperature: current.temperature_2m,
           windspeed: current.windspeed_10m,
@@ -579,6 +600,8 @@ async function loadCityWeather() {
       } catch {
         tempEl.textContent = '--';
         weatherEl.textContent = 'Unavailable';
+        windEl.hidden = true;
+        precipEl.hidden = true;
       }
     }),
   );

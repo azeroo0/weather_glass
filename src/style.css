@@ -223,6 +223,27 @@ input[type='range']:focus-visible {
   height: 100%;
 }
 
+.wind,
+.precip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.wind svg,
+.precip svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.wind-arrow {
+  transition: transform 0.3s ease;
+}
+
 .city-button:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 4px;
@@ -259,6 +280,17 @@ input[type='range']:focus-visible {
     flex-wrap: wrap;
   }
 
+  .city-button {
+    gap: 0.3rem 0.4rem;
+    font-size: 0.78rem;
+  }
+
+  .wind,
+  .precip {
+    font-size: 0.7rem;
+    gap: 0.15rem;
+  }
+
   input[type='range'] {
     max-width: 100%;
   }
@@ -271,6 +303,10 @@ input[type='range']:focus-visible {
 
   input[type='range']::-webkit-slider-thumb,
   input[type='range']::-moz-range-thumb {
+    transition: none;
+  }
+
+  .wind-arrow {
     transition: none;
   }
 }
