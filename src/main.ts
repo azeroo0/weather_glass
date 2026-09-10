@@ -10,6 +10,7 @@ const timeDisplay = document.querySelector<HTMLSpanElement>('#currentTime')!;
 const weatherLabel = document.querySelector<HTMLSpanElement>('#weatherLabel')!;
 const cityLabel = document.querySelector<HTMLSpanElement>('#cityLabel')!;
 const lastUpdatedEl = document.querySelector<HTMLParagraphElement>('#lastUpdated')!;
+const playButton = document.querySelector<HTMLButtonElement>('#playButton')!;
 const ctx = canvas.getContext('2d')!;
 
 function resizeCanvas() {
@@ -142,6 +143,40 @@ function weatherModeFromCode(code: number): WeatherMode {
   return 'cloudy';
 }
 
+// Small decorative glyphs for the "Right now" list, independent of the
+// hero canvas's currently-selected city - each reflects that row's own
+// weathercode-derived mode.
+const MODE_ICON: Record<WeatherMode, string> = {
+  sunny: `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="8" cy="8" r="3.2" fill="#ffd23c" />
+    <g stroke="#ffd23c" stroke-width="1.2" stroke-linecap="round">
+      <line x1="8" y1="0.8" x2="8" y2="2.4" />
+      <line x1="8" y1="13.6" x2="8" y2="15.2" />
+      <line x1="0.8" y1="8" x2="2.4" y2="8" />
+      <line x1="13.6" y1="8" x2="15.2" y2="8" />
+      <line x1="2.7" y1="2.7" x2="3.8" y2="3.8" />
+      <line x1="12.2" y1="12.2" x2="13.3" y2="13.3" />
+      <line x1="2.7" y1="13.3" x2="3.8" y2="12.2" />
+      <line x1="12.2" y1="3.8" x2="13.3" y2="2.7" />
+    </g>
+  </svg>`,
+  cloudy: `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4.6 11.5a3 3 0 0 1-.5-5.95 3.5 3.5 0 0 1 6.7-1.3A3 3 0 0 1 12.4 11.5z" fill="#aab0ba" />
+  </svg>`,
+  rainy: `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4.1 8.6a2.5 2.5 0 0 1-.4-4.97A3 3 0 0 1 9.2 2.2 2.5 2.5 0 0 1 12 4.5 2.5 2.5 0 0 1 11.5 9.5H4.1z" fill="#5b7ca3" />
+    <g stroke="#5b7ca3" stroke-width="1.2" stroke-linecap="round">
+      <line x1="5" y1="11" x2="4.3" y2="13.2" />
+      <line x1="8" y1="11" x2="7.3" y2="13.2" />
+      <line x1="11" y1="11" x2="10.3" y2="13.2" />
+    </g>
+  </svg>`,
+};
+
+function weatherModeIcon(mode: WeatherMode): string {
+  return MODE_ICON[mode];
+}
+
 const MODE_PARTICLE_COUNT: Record<WeatherMode, number> = {
   sunny: 110,
   cloudy: PARTICLE_COUNT,
@@ -246,7 +281,50 @@ function updateFromSlider() {
   }
 }
 
-slider.addEventListener('input', updateFromSlider);
+const PLAYBACK_DURATION_MS = 12000;
+let isPlayingDay = false;
+let playbackStartTime = 0;
+
+function stopDayPlayback() {
+  isPlayingDay = false;
+  playButton.textContent = '▶ 하루 흐름 보기';
+  playButton.setAttribute('aria-pressed', 'false');
+}
+
+function playDayStep(now: number) {
+  if (!isPlayingDay) return;
+  const progress = Math.min((now - playbackStartTime) / PLAYBACK_DURATION_MS, 1);
+  slider.value = String(progress * 24);
+  updateFromSlider();
+  if (progress >= 1) {
+    stopDayPlayback();
+    return;
+  }
+  requestAnimationFrame(playDayStep);
+}
+
+function startDayPlayback() {
+  isPlayingDay = true;
+  playButton.textContent = '■ 정지';
+  playButton.setAttribute('aria-pressed', 'true');
+  playbackStartTime = performance.now();
+  requestAnimationFrame(playDayStep);
+}
+
+playButton.addEventListener('click', () => {
+  if (isPlayingDay) {
+    stopDayPlayback();
+  } else {
+    startDayPlayback();
+  }
+});
+
+slider.addEventListener('input', () => {
+  if (isPlayingDay) {
+    stopDayPlayback();
+  }
+  updateFromSlider();
+});
 updateFromSlider();
 
 const fadeUpSections = document.querySelectorAll<HTMLElement>('.fade-up');
@@ -468,6 +546,7 @@ cityButtons.forEach((button) => {
 async function loadCityWeather() {
   await Promise.all(
     Array.from(cityButtons).map(async (button) => {
+      const iconEl = button.querySelector<HTMLSpanElement>('.weather-icon')!;
       const tempEl = button.querySelector<HTMLSpanElement>('.temp')!;
       const weatherEl = button.querySelector<HTMLSpanElement>('.weather')!;
       const name = button.dataset.name!;
@@ -490,6 +569,7 @@ async function loadCityWeather() {
         });
         tempEl.textContent = `${Math.round(current.temperature_2m)}°C`;
         weatherEl.textContent = weatherLabelFromCode(current.weathercode);
+        iconEl.innerHTML = weatherModeIcon(weatherModeFromCode(current.weathercode));
 
         console.log(`[weather] ${name}:`, {
           temperature: current.temperature_2m,

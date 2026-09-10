@@ -22,15 +22,18 @@
         <span id="cityLabel" class="city-label">Seoul 기준</span>
         <h1>오늘의 공기를 흐름으로 그리다</h1>
         <p>시간에 따라 달라지는 공기의 흐름을 파티클로 그려냅니다.</p>
-        <input
-          id="timeSlider"
-          type="range"
-          min="0"
-          max="24"
-          step="0.1"
-          value="12"
-          aria-label="시간 (0시부터 24시까지)"
-        />
+        <div class="slider-row">
+          <input
+            id="timeSlider"
+            type="range"
+            min="0"
+            max="24"
+            step="0.1"
+            value="12"
+            aria-label="시간 (0시부터 24시까지)"
+          />
+          <button type="button" id="playButton" class="play-button" aria-pressed="false">▶ 하루 흐름 보기</button>
+        </div>
         <div class="time-info">
           <span id="currentTime">12:00</span>
           <span id="weatherLabel">정오</span>
@@ -42,21 +45,25 @@
         <ul id="cityList">
           <li>
             <button type="button" class="city-button" data-name="Seoul" data-lat="37.5665" data-lon="126.978" aria-pressed="false">
+              <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">Seoul</span><span class="temp">--</span><span class="weather">Loading…</span>
             </button>
           </li>
           <li>
             <button type="button" class="city-button" data-name="London" data-lat="51.5074" data-lon="-0.1278" aria-pressed="false">
+              <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">London</span><span class="temp">--</span><span class="weather">Loading…</span>
             </button>
           </li>
           <li>
             <button type="button" class="city-button" data-name="Bangkok" data-lat="13.7563" data-lon="100.5018" aria-pressed="false">
+              <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">Bangkok</span><span class="temp">--</span><span class="weather">Loading…</span>
             </button>
           </li>
           <li>
             <button type="button" class="city-button" data-name="Vancouver" data-lat="49.2827" data-lon="-123.1207" aria-pressed="false">
+              <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">Vancouver</span><span class="temp">--</span><span class="weather">Loading…</span>
             </button>
           </li>

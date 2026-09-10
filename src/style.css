@@ -105,6 +105,30 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.slider-row input[type='range'] {
+  flex: 1;
+}
+
+.play-button {
+  all: unset;
+  font: inherit;
+  color: inherit;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.play-button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
 input[type='range'] {
   -webkit-appearance: none;
   appearance: none;
@@ -179,11 +203,24 @@ input[type='range']:focus-visible {
   all: unset;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem 1.5rem;
   width: 100%;
   font: inherit;
   color: inherit;
   cursor: pointer;
+}
+
+.weather-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.weather-icon svg {
+  width: 100%;
+  height: 100%;
 }
 
 .city-button:focus-visible {
@@ -215,6 +252,10 @@ input[type='range']:focus-visible {
   }
 
   .hero .time-info {
+    flex-wrap: wrap;
+  }
+
+  .slider-row {
     flex-wrap: wrap;
   }
 
