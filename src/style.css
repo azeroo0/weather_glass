@@ -80,6 +80,13 @@ main {
   justify-content: center;
 }
 
+.city-label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: -0.75rem;
+}
+
 .hero h1 {
   font-size: clamp(2.75rem, 7vw, 5.5rem);
   line-height: 1.05;
@@ -158,6 +165,10 @@ input[type='range']:focus-visible {
   gap: 1.5rem;
 }
 
+.about p {
+  max-width: none;
+}
+
 .right-now ul {
   display: flex;
   flex-direction: column;
@@ -183,6 +194,10 @@ input[type='range']:focus-visible {
 .city-button[aria-pressed='true'] .city {
   text-decoration: underline;
   text-underline-offset: 4px;
+}
+
+.last-updated {
+  font-size: 0.85rem;
 }
 
 @media (max-width: 480px) {

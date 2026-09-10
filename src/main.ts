@@ -8,6 +8,8 @@ const canvas = document.querySelector<HTMLCanvasElement>('#flowCanvas')!;
 const slider = document.querySelector<HTMLInputElement>('#timeSlider')!;
 const timeDisplay = document.querySelector<HTMLSpanElement>('#currentTime')!;
 const weatherLabel = document.querySelector<HTMLSpanElement>('#weatherLabel')!;
+const cityLabel = document.querySelector<HTMLSpanElement>('#cityLabel')!;
+const lastUpdatedEl = document.querySelector<HTMLParagraphElement>('#lastUpdated')!;
 const ctx = canvas.getContext('2d')!;
 
 function resizeCanvas() {
@@ -158,6 +160,22 @@ const TRAIL_FADE_ALPHA: Record<WeatherMode, number> = {
   rainy: 0.05,
 };
 
+// Brightness always comes from the time-of-day color (PARTICLE_KEYFRAMES
+// above) - weathercode only lays a light tint on top of it, so e.g. rainy
+// at noon still reads as clearly brighter than rainy at midnight. Keep
+// `strength` low; a high mix ratio would wash out the day/night signal
+// entirely, which is exactly the bug this fixes.
+const MODE_TINT: Record<WeatherMode, { color: [number, number, number]; strength: number }> = {
+  sunny: { color: [255, 210, 60], strength: 0.4 },
+  cloudy: { color: [150, 155, 165], strength: 0.4 },
+  rainy: { color: [15, 20, 50], strength: 0.35 },
+};
+
+function resolveParticleColor(mode: WeatherMode, base: [number, number, number]): [number, number, number] {
+  const tint = MODE_TINT[mode];
+  return mixColor(base, tint.color, tint.strength);
+}
+
 let currentWeatherMode: WeatherMode = 'cloudy';
 let flowSpeed = 1.5;
 let flowBias = { x: 0, y: 0 };
@@ -271,7 +289,7 @@ function updateSunnyParticle(p: Particle, time: number) {
 function drawSunnyParticle(p: Particle, color: [number, number, number], time: number) {
   const twinkle = 0.5 + 0.5 * Math.sin(time * 4 + p.seed * 30);
   ctx.globalAlpha = 0.5 + twinkle * 0.5;
-  ctx.fillStyle = rgbString(mixColor(color, [255, 255, 255], 0.5));
+  ctx.fillStyle = rgbString(color);
   ctx.beginPath();
   ctx.arc(p.x, p.y, 1 + twinkle * 0.8, 0, Math.PI * 2);
   ctx.fill();
@@ -297,7 +315,7 @@ function updateCloudyParticle(p: Particle, time: number) {
 
 function drawCloudyParticle(p: Particle, color: [number, number, number], time: number) {
   const radius = 5 + Math.sin(p.seed * 10 + time) * 1.5 + 3;
-  const [r, g, b] = mixColor(color, [220, 220, 228], 0.75);
+  const [r, g, b] = color;
   const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius);
   gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.5)`);
   gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
@@ -317,7 +335,7 @@ function updateRainParticle(p: Particle) {
 function drawRainParticle(p: Particle, color: [number, number, number]) {
   const length = 8 + Math.abs(flowBias.x) * 4;
   const slantX = flowBias.x * 3;
-  ctx.strokeStyle = rgbString(mixColor(color, [5, 5, 15], 0.6));
+  ctx.strokeStyle = rgbString(color);
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(p.x, p.y);
@@ -350,6 +368,7 @@ function drawFrame(time: number) {
     drawRainNoiseOverlay();
   }
 
+  const renderColor = resolveParticleColor(currentWeatherMode, particleColorRGB);
   const count = MODE_PARTICLE_COUNT[currentWeatherMode];
   for (let i = 0; i < count; i++) {
     const p = particles[i];
@@ -357,15 +376,15 @@ function drawFrame(time: number) {
     if (currentWeatherMode === 'sunny') {
       updateSunnyParticle(p, time);
       wrapParticle(p);
-      drawSunnyParticle(p, particleColorRGB, time);
+      drawSunnyParticle(p, renderColor, time);
     } else if (currentWeatherMode === 'cloudy') {
       updateCloudyParticle(p, time);
       wrapParticle(p);
-      drawCloudyParticle(p, particleColorRGB, time);
+      drawCloudyParticle(p, renderColor, time);
     } else {
       updateRainParticle(p);
       wrapParticle(p);
-      drawRainParticle(p, particleColorRGB);
+      drawRainParticle(p, renderColor);
     }
   }
 }
@@ -394,6 +413,24 @@ function weatherLabelFromCode(code: number): string {
   return 'Unknown';
 }
 
+let lastFetchTime: Date | null = null;
+
+function formatRelativeUpdate(date: Date): string {
+  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return '방금 전';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}시간 전`;
+}
+
+function renderLastUpdated() {
+  if (!lastFetchTime) return;
+  lastUpdatedEl.textContent = `마지막 업데이트: ${formatRelativeUpdate(lastFetchTime)}`;
+}
+
+setInterval(renderLastUpdated, 30000);
+
 const cityButtons = document.querySelectorAll<HTMLButtonElement>('.city-button');
 
 function updateCitySelectionUI() {
@@ -407,6 +444,13 @@ function selectCity(name: string) {
   applyWeatherToFlowField(cityWeatherByName.get(name));
   applyAmbient(Number(slider.value));
   updateCitySelectionUI();
+  cityLabel.textContent = `${name} 기준`;
+
+  const weather = cityWeatherByName.get(name);
+  console.log(
+    `[city] ${name}: mode=${currentWeatherMode}, weathercode=${weather ? weather.weathercode : 'N/A'}`,
+  );
+
   if (prefersReducedMotion) {
     drawFrame(0);
   }
@@ -446,12 +490,23 @@ async function loadCityWeather() {
         });
         tempEl.textContent = `${Math.round(current.temperature_2m)}°C`;
         weatherEl.textContent = weatherLabelFromCode(current.weathercode);
+
+        console.log(`[weather] ${name}:`, {
+          temperature: current.temperature_2m,
+          windspeed: current.windspeed_10m,
+          weathercode: current.weathercode,
+        });
       } catch {
         tempEl.textContent = '--';
         weatherEl.textContent = 'Unavailable';
       }
     }),
   );
+
+  if (cityWeatherByName.size > 0) {
+    lastFetchTime = new Date();
+    renderLastUpdated();
+  }
 
   const defaultCity = cityButtons[0]?.dataset.name;
   const firstAvailable = defaultCity && cityWeatherByName.has(defaultCity) ? defaultCity : [...cityWeatherByName.keys()][0];
