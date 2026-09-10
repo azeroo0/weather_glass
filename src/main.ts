@@ -1,4 +1,8 @@
 import './style.css';
+import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
+
+gsap.registerPlugin(ScrollTrigger);
 
 const canvas = document.querySelector<HTMLCanvasElement>('#flowCanvas')!;
 const slider = document.querySelector<HTMLInputElement>('#timeSlider')!;
@@ -81,6 +85,19 @@ function updateFromSlider() {
 
 slider.addEventListener('input', updateFromSlider);
 updateFromSlider();
+
+document.querySelectorAll<HTMLElement>('.fade-up').forEach((section) => {
+  gsap.from(section, {
+    opacity: 0,
+    y: 40,
+    duration: 0.8,
+    ease: 'power2.out',
+    scrollTrigger: {
+      trigger: section,
+      start: 'top 80%',
+    },
+  });
+});
 
 function fieldAngle(x: number, y: number, time: number): number {
   return Math.sin(x * 0.01 + time) + Math.cos(y * 0.01 + time);
