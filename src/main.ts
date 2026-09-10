@@ -81,6 +81,10 @@ function colorForTime(hour: number): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 function labelForTime(hour: number): string {
   if (hour < 3 || hour >= 21) return '밤';
   if (hour < 9) return '새벽';
@@ -97,8 +101,55 @@ function formatTime(hour: number): string {
 
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+// Role split: the time slider only drives day/night ambient brightness
+// (particle hue + background color keyframes above). Flow *dynamics* -
+// speed, direction bias, turbulence - come entirely from the selected
+// city's live weather, applied below.
+interface CityWeather {
+  name: string;
+  temperature: number;
+  windspeed: number; // km/h
+  winddirection: number; // degrees, direction the wind is blowing FROM
+  precipitation: number; // mm, last hour
+  cloudcover: number; // %
+  weathercode: number;
+}
+
+const cityWeatherByName = new Map<string, CityWeather>();
+let selectedCityName: string | null = null;
+
+let flowSpeed = 1.5;
+let flowBias = { x: 0, y: 0 };
+let flowTurbulence = 0;
+let cloudDarkenFactor = 1;
+
+function applyWeatherToFlowField(weather: CityWeather | undefined) {
+  if (!weather) {
+    flowSpeed = 1.5;
+    flowBias = { x: 0, y: 0 };
+    flowTurbulence = 0;
+    cloudDarkenFactor = 1;
+    return;
+  }
+
+  flowSpeed = clamp(0.4 + weather.windspeed * 0.06, 0.4, 4.5);
+
+  const biasStrength = clamp(weather.windspeed / 20, 0.15, 1.5);
+  const flowBearing = (weather.winddirection + 180) % 360; // wind blows TOWARD this bearing
+  const biasAngle = ((flowBearing - 90) * Math.PI) / 180; // meteorological bearing -> canvas angle
+  flowBias = { x: Math.cos(biasAngle) * biasStrength, y: Math.sin(biasAngle) * biasStrength };
+
+  flowTurbulence = clamp(weather.precipitation * 0.15, 0, 1.2);
+  cloudDarkenFactor = 1 - clamp(weather.cloudcover / 100, 0, 1) * 0.35;
+}
+
+function effectiveBackgroundRGB(hour: number): [number, number, number] {
+  const [r, g, b] = interpolateKeyframes(BACKGROUND_KEYFRAMES, hour);
+  return [r * cloudDarkenFactor, g * cloudDarkenFactor, b * cloudDarkenFactor];
+}
+
 let particleColor = colorForTime(Number(slider.value));
-let backgroundRGB = interpolateKeyframes(BACKGROUND_KEYFRAMES, Number(slider.value));
+let backgroundRGB = effectiveBackgroundRGB(Number(slider.value));
 
 function srgbChannelToLinear(channel: number): number {
   const s = channel / 255;
@@ -115,12 +166,17 @@ function relativeLuminance([r, g, b]: [number, number, number]): number {
 
 const CONTRAST_CROSSOVER_LUMINANCE = Math.sqrt(1.05 * 0.05) - 0.05;
 
+function applyAmbient(hour: number) {
+  backgroundRGB = effectiveBackgroundRGB(hour);
+  const [br, bg, bb] = backgroundRGB.map(Math.round);
+  document.body.style.backgroundColor = `rgb(${br}, ${bg}, ${bb})`;
+  document.body.classList.toggle('is-light', relativeLuminance(backgroundRGB) > CONTRAST_CROSSOVER_LUMINANCE);
+}
+
 function updateFromSlider() {
   const hour = Number(slider.value);
   particleColor = colorForTime(hour);
-  backgroundRGB = interpolateKeyframes(BACKGROUND_KEYFRAMES, hour);
-  document.body.style.backgroundColor = `rgb(${backgroundRGB[0]}, ${backgroundRGB[1]}, ${backgroundRGB[2]})`;
-  document.body.classList.toggle('is-light', relativeLuminance(backgroundRGB) > CONTRAST_CROSSOVER_LUMINANCE);
+  applyAmbient(hour);
   timeDisplay.textContent = formatTime(hour);
   weatherLabel.textContent = labelForTime(hour);
   slider.setAttribute('aria-valuetext', `${formatTime(hour)}, ${labelForTime(hour)}`);
@@ -163,8 +219,17 @@ function drawFrame(time: number) {
   ctx.fillStyle = particleColor;
   for (const p of particles) {
     const angle = fieldAngle(p.x, p.y, time);
-    p.x += Math.cos(angle) * 1.5;
-    p.y += Math.sin(angle) * 1.5;
+    let vx = Math.cos(angle) + flowBias.x;
+    let vy = Math.sin(angle) + flowBias.y;
+
+    if (flowTurbulence > 0) {
+      vx += (Math.random() - 0.5) * flowTurbulence;
+      vy += (Math.random() - 0.5) * flowTurbulence;
+    }
+
+    const len = Math.hypot(vx, vy) || 1;
+    p.x += (vx / len) * flowSpeed;
+    p.y += (vy / len) * flowSpeed;
 
     if (p.x < 0) p.x = canvas.width;
     if (p.x > canvas.width) p.x = 0;
@@ -199,27 +264,70 @@ function weatherLabelFromCode(code: number): string {
   return 'Unknown';
 }
 
+const cityButtons = document.querySelectorAll<HTMLButtonElement>('.city-button');
+
+function updateCitySelectionUI() {
+  cityButtons.forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.name === selectedCityName));
+  });
+}
+
+function selectCity(name: string) {
+  selectedCityName = name;
+  applyWeatherToFlowField(cityWeatherByName.get(name));
+  applyAmbient(Number(slider.value));
+  updateCitySelectionUI();
+  if (prefersReducedMotion) {
+    drawFrame(0);
+  }
+}
+
+cityButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const name = button.dataset.name;
+    if (name && cityWeatherByName.has(name)) {
+      selectCity(name);
+    }
+  });
+});
+
 async function loadCityWeather() {
-  const items = document.querySelectorAll<HTMLLIElement>('#cityList li');
   await Promise.all(
-    Array.from(items).map(async (li) => {
-      const tempEl = li.querySelector<HTMLSpanElement>('.temp')!;
-      const weatherEl = li.querySelector<HTMLSpanElement>('.weather')!;
+    Array.from(cityButtons).map(async (button) => {
+      const tempEl = button.querySelector<HTMLSpanElement>('.temp')!;
+      const weatherEl = button.querySelector<HTMLSpanElement>('.weather')!;
+      const name = button.dataset.name!;
       try {
-        const { lat, lon } = li.dataset;
+        const { lat, lon } = button.dataset;
         const res = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`,
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,windspeed_10m,winddirection_10m,precipitation,cloudcover,weathercode`,
         );
         if (!res.ok) throw new Error('Request failed');
         const data = await res.json();
-        tempEl.textContent = `${Math.round(data.current_weather.temperature)}°C`;
-        weatherEl.textContent = weatherLabelFromCode(data.current_weather.weathercode);
+        const current = data.current;
+        cityWeatherByName.set(name, {
+          name,
+          temperature: current.temperature_2m,
+          windspeed: current.windspeed_10m,
+          winddirection: current.winddirection_10m,
+          precipitation: current.precipitation,
+          cloudcover: current.cloudcover,
+          weathercode: current.weathercode,
+        });
+        tempEl.textContent = `${Math.round(current.temperature_2m)}°C`;
+        weatherEl.textContent = weatherLabelFromCode(current.weathercode);
       } catch {
         tempEl.textContent = '--';
         weatherEl.textContent = 'Unavailable';
       }
     }),
   );
+
+  const defaultCity = cityButtons[0]?.dataset.name;
+  const firstAvailable = defaultCity && cityWeatherByName.has(defaultCity) ? defaultCity : [...cityWeatherByName.keys()][0];
+  if (firstAvailable) {
+    selectCity(firstAvailable);
+  }
 }
 
 loadCityWeather();
