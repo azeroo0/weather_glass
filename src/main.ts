@@ -74,6 +74,8 @@ function formatTime(hour: number): string {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 let particleColor = colorForTime(Number(slider.value));
 
 function updateFromSlider() {
@@ -81,33 +83,40 @@ function updateFromSlider() {
   particleColor = colorForTime(hour);
   timeDisplay.textContent = formatTime(hour);
   weatherLabel.textContent = labelForTime(hour);
+  slider.setAttribute('aria-valuetext', `${formatTime(hour)}, ${labelForTime(hour)}`);
+  if (prefersReducedMotion) {
+    drawFrame(0);
+  }
 }
 
 slider.addEventListener('input', updateFromSlider);
 updateFromSlider();
 
-document.querySelectorAll<HTMLElement>('.fade-up').forEach((section) => {
-  gsap.from(section, {
-    opacity: 0,
-    y: 40,
-    duration: 0.8,
-    ease: 'power2.out',
-    scrollTrigger: {
-      trigger: section,
-      start: 'top 80%',
-    },
+const fadeUpSections = document.querySelectorAll<HTMLElement>('.fade-up');
+if (prefersReducedMotion) {
+  gsap.set(fadeUpSections, { opacity: 1, y: 0 });
+} else {
+  fadeUpSections.forEach((section) => {
+    gsap.from(section, {
+      opacity: 0,
+      y: 40,
+      duration: 0.8,
+      ease: 'power2.out',
+      scrollTrigger: {
+        trigger: section,
+        start: 'top 80%',
+      },
+    });
   });
-});
+}
 
 function fieldAngle(x: number, y: number, time: number): number {
   return Math.sin(x * 0.01 + time) + Math.cos(y * 0.01 + time);
 }
 
-function step() {
+function drawFrame(time: number) {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  const time = performance.now() * 0.0005;
 
   ctx.fillStyle = particleColor;
   for (const p of particles) {
@@ -122,8 +131,15 @@ function step() {
 
     ctx.fillRect(p.x, p.y, 2, 2);
   }
+}
 
+function step() {
+  drawFrame(performance.now() * 0.0005);
   requestAnimationFrame(step);
 }
 
-requestAnimationFrame(step);
+if (prefersReducedMotion) {
+  drawFrame(0);
+} else {
+  requestAnimationFrame(step);
+}

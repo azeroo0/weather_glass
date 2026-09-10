@@ -133,6 +133,11 @@ input[type='range']::-moz-range-thumb:hover {
   transform: scale(1.2);
 }
 
+input[type='range']:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 6px;
+}
+
 .right-now,
 .about {
   display: flex;
@@ -148,5 +153,36 @@ input[type='range']::-moz-range-thumb:hover {
 
 .right-now li {
   display: flex;
-  gap: 1.5rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+
+@media (max-width: 480px) {
+  nav {
+    padding: 1rem 1.25rem;
+  }
+
+  main {
+    padding: 0 1.25rem clamp(3rem, 12vw, 5rem);
+    gap: clamp(3rem, 12vw, 5rem);
+  }
+
+  .hero h1 {
+    font-size: clamp(2.25rem, 9vw, 3rem);
+  }
+
+  .hero .time-info {
+    flex-wrap: wrap;
+  }
+
+  input[type='range'] {
+    max-width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input[type='range']::-webkit-slider-thumb,
+  input[type='range']::-moz-range-thumb {
+    transition: none;
+  }
 }

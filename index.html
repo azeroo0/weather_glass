@@ -21,7 +21,15 @@
       <section class="hero">
         <h1>오늘의 공기를 흐름으로 그리다</h1>
         <p>시간에 따라 달라지는 공기의 흐름을 파티클로 그려냅니다.</p>
-        <input id="timeSlider" type="range" min="0" max="24" step="0.1" value="12" />
+        <input
+          id="timeSlider"
+          type="range"
+          min="0"
+          max="24"
+          step="0.1"
+          value="12"
+          aria-label="시간 (0시부터 24시까지)"
+        />
         <div class="time-info">
           <span id="currentTime">12:00</span>
           <span id="weatherLabel">정오</span>
