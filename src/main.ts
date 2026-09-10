@@ -29,11 +29,13 @@ const PARTICLE_COUNT = 300;
 interface Particle {
   x: number;
   y: number;
+  seed: number;
 }
 
 const particles: Particle[] = Array.from({ length: PARTICLE_COUNT }, () => ({
   x: Math.random() * canvas.width,
   y: Math.random() * canvas.height,
+  seed: Math.random(),
 }));
 
 type ColorKeyframe = {
@@ -76,13 +78,20 @@ function interpolateKeyframes(keyframes: ColorKeyframe[], hour: number): [number
   ];
 }
 
-function colorForTime(hour: number): string {
-  const [r, g, b] = interpolateKeyframes(PARTICLE_KEYFRAMES, hour);
-  return `rgb(${r}, ${g}, ${b})`;
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function mixColor(
+  a: [number, number, number],
+  b: [number, number, number],
+  t: number,
+): [number, number, number] {
+  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+}
+
+function rgbString([r, g, b]: [number, number, number]): string {
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 function labelForTime(hour: number): string {
@@ -118,6 +127,38 @@ interface CityWeather {
 const cityWeatherByName = new Map<string, CityWeather>();
 let selectedCityName: string | null = null;
 
+// WMO weathercode -> which rendering mode the flow field uses. Each mode
+// has its own particle shape AND motion logic (see drawSunnyParticle /
+// drawCloudyParticle / drawRainParticle below) - this isn't just a
+// parameter tweak, it's a different visual language per weather type.
+type WeatherMode = 'sunny' | 'cloudy' | 'rainy';
+
+function weatherModeFromCode(code: number): WeatherMode {
+  if (code <= 1) return 'sunny';
+  if (code === 2 || code === 3 || code === 45 || code === 48) return 'cloudy';
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 99)) return 'rainy';
+  return 'cloudy';
+}
+
+const MODE_PARTICLE_COUNT: Record<WeatherMode, number> = {
+  sunny: 110,
+  cloudy: PARTICLE_COUNT,
+  rainy: 260,
+};
+
+// How fast each frame's fade-to-background overlay erases the previous
+// frame. Sunny/cloudy need a quick wipe so particles read as discrete
+// dots/blobs; rain keeps a slow wipe so its streaks accumulate into
+// visible sheets of rain. Declared early: reduced-motion calls drawFrame()
+// synchronously during the initial updateFromSlider(), before the bottom
+// of this module has executed.
+const TRAIL_FADE_ALPHA: Record<WeatherMode, number> = {
+  sunny: 0.3,
+  cloudy: 0.18,
+  rainy: 0.05,
+};
+
+let currentWeatherMode: WeatherMode = 'cloudy';
 let flowSpeed = 1.5;
 let flowBias = { x: 0, y: 0 };
 let flowTurbulence = 0;
@@ -125,6 +166,7 @@ let cloudDarkenFactor = 1;
 
 function applyWeatherToFlowField(weather: CityWeather | undefined) {
   if (!weather) {
+    currentWeatherMode = 'cloudy';
     flowSpeed = 1.5;
     flowBias = { x: 0, y: 0 };
     flowTurbulence = 0;
@@ -132,6 +174,7 @@ function applyWeatherToFlowField(weather: CityWeather | undefined) {
     return;
   }
 
+  currentWeatherMode = weatherModeFromCode(weather.weathercode);
   flowSpeed = clamp(0.4 + weather.windspeed * 0.06, 0.4, 4.5);
 
   const biasStrength = clamp(weather.windspeed / 20, 0.15, 1.5);
@@ -148,7 +191,7 @@ function effectiveBackgroundRGB(hour: number): [number, number, number] {
   return [r * cloudDarkenFactor, g * cloudDarkenFactor, b * cloudDarkenFactor];
 }
 
-let particleColor = colorForTime(Number(slider.value));
+let particleColorRGB = interpolateKeyframes(PARTICLE_KEYFRAMES, Number(slider.value));
 let backgroundRGB = effectiveBackgroundRGB(Number(slider.value));
 
 function srgbChannelToLinear(channel: number): number {
@@ -175,7 +218,7 @@ function applyAmbient(hour: number) {
 
 function updateFromSlider() {
   const hour = Number(slider.value);
-  particleColor = colorForTime(hour);
+  particleColorRGB = interpolateKeyframes(PARTICLE_KEYFRAMES, hour);
   applyAmbient(hour);
   timeDisplay.textContent = formatTime(hour);
   weatherLabel.textContent = labelForTime(hour);
@@ -211,32 +254,119 @@ function fieldAngle(x: number, y: number, time: number): number {
   return Math.sin(x * 0.01 + time) + Math.cos(y * 0.01 + time);
 }
 
+function wrapParticle(p: Particle) {
+  if (p.x < 0) p.x = canvas.width;
+  if (p.x > canvas.width) p.x = 0;
+  if (p.y < 0) p.y = canvas.height;
+  if (p.y > canvas.height) p.y = 0;
+}
+
+// Sunny: sparse, small, bright motes drifting slowly upward with an
+// occasional brightness twinkle - not following the curl field at all.
+function updateSunnyParticle(p: Particle, time: number) {
+  p.x += Math.sin(time + p.seed * Math.PI * 2) * 0.4 + flowBias.x * 0.5;
+  p.y += -0.5 - flowSpeed * 0.15;
+}
+
+function drawSunnyParticle(p: Particle, color: [number, number, number], time: number) {
+  const twinkle = 0.5 + 0.5 * Math.sin(time * 4 + p.seed * 30);
+  ctx.globalAlpha = 0.5 + twinkle * 0.5;
+  ctx.fillStyle = rgbString(mixColor(color, [255, 255, 255], 0.5));
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 1 + twinkle * 0.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+// Cloudy: large, soft, high-density blobs (faked blur via radial
+// gradient) drifting together slowly with the ambient wind.
+function updateCloudyParticle(p: Particle, time: number) {
+  const angle = fieldAngle(p.x, p.y, time * 0.5);
+  let vx = Math.cos(angle) * 0.5 + flowBias.x;
+  let vy = Math.sin(angle) * 0.5 + flowBias.y;
+
+  if (flowTurbulence > 0) {
+    vx += (Math.random() - 0.5) * flowTurbulence * 0.5;
+    vy += (Math.random() - 0.5) * flowTurbulence * 0.5;
+  }
+
+  const len = Math.hypot(vx, vy) || 1;
+  p.x += (vx / len) * flowSpeed * 0.6;
+  p.y += (vy / len) * flowSpeed * 0.6;
+}
+
+function drawCloudyParticle(p: Particle, color: [number, number, number], time: number) {
+  const radius = 5 + Math.sin(p.seed * 10 + time) * 1.5 + 3;
+  const [r, g, b] = mixColor(color, [220, 220, 228], 0.75);
+  const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius);
+  gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.5)`);
+  gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Rainy: thin, fast-falling streaks slanted by wind, plus a subtle
+// vertical noise overlay across the whole screen.
+function updateRainParticle(p: Particle) {
+  p.x += flowBias.x * 1.5 + (Math.random() - 0.5) * flowTurbulence * 2;
+  p.y += 6 + flowSpeed * 1.5;
+}
+
+function drawRainParticle(p: Particle, color: [number, number, number]) {
+  const length = 8 + Math.abs(flowBias.x) * 4;
+  const slantX = flowBias.x * 3;
+  ctx.strokeStyle = rgbString(mixColor(color, [5, 5, 15], 0.6));
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y);
+  ctx.lineTo(p.x - slantX, p.y - length);
+  ctx.stroke();
+}
+
+function drawRainNoiseOverlay() {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 40; i++) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+    const streakLength = 10 + Math.random() * 30;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y + streakLength);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawFrame(time: number) {
   const [br, bg, bb] = backgroundRGB;
-  ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, 0.05)`;
+  ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, ${TRAIL_FADE_ALPHA[currentWeatherMode]})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillStyle = particleColor;
-  for (const p of particles) {
-    const angle = fieldAngle(p.x, p.y, time);
-    let vx = Math.cos(angle) + flowBias.x;
-    let vy = Math.sin(angle) + flowBias.y;
+  if (currentWeatherMode === 'rainy') {
+    drawRainNoiseOverlay();
+  }
 
-    if (flowTurbulence > 0) {
-      vx += (Math.random() - 0.5) * flowTurbulence;
-      vy += (Math.random() - 0.5) * flowTurbulence;
+  const count = MODE_PARTICLE_COUNT[currentWeatherMode];
+  for (let i = 0; i < count; i++) {
+    const p = particles[i];
+
+    if (currentWeatherMode === 'sunny') {
+      updateSunnyParticle(p, time);
+      wrapParticle(p);
+      drawSunnyParticle(p, particleColorRGB, time);
+    } else if (currentWeatherMode === 'cloudy') {
+      updateCloudyParticle(p, time);
+      wrapParticle(p);
+      drawCloudyParticle(p, particleColorRGB, time);
+    } else {
+      updateRainParticle(p);
+      wrapParticle(p);
+      drawRainParticle(p, particleColorRGB);
     }
-
-    const len = Math.hypot(vx, vy) || 1;
-    p.x += (vx / len) * flowSpeed;
-    p.y += (vy / len) * flowSpeed;
-
-    if (p.x < 0) p.x = canvas.width;
-    if (p.x > canvas.width) p.x = 0;
-    if (p.y < 0) p.y = canvas.height;
-    if (p.y > canvas.height) p.y = 0;
-
-    ctx.fillRect(p.x, p.y, 2, 2);
   }
 }
 
