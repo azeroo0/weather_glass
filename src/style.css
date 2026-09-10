@@ -7,7 +7,9 @@ body {
   font-family: 'Inter', sans-serif;
   line-height: 1.6;
   letter-spacing: 0.01em;
-  color: #f5f5f2;
+  color: #fff;
+  background-color: #06081a;
+  transition: background-color 0.6s ease;
 }
 
 h1,
@@ -23,6 +25,13 @@ h1,
 h2,
 .logo {
   font-family: 'Fraunces', serif;
+}
+
+h1,
+h2,
+p,
+span {
+  mix-blend-mode: difference;
 }
 
 ul {
@@ -69,12 +78,10 @@ main {
   line-height: 1.05;
   letter-spacing: -0.02em;
   font-weight: 600;
-  mix-blend-mode: difference;
 }
 
 .hero p {
   font-size: 1.125rem;
-  mix-blend-mode: difference;
 }
 
 .hero .time-info {
@@ -82,7 +89,6 @@ main {
   gap: 1rem;
   font-size: 0.95rem;
   font-variant-numeric: tabular-nums;
-  mix-blend-mode: difference;
 }
 
 input[type='range'] {
@@ -98,12 +104,14 @@ input[type='range'] {
 input[type='range']::-webkit-slider-runnable-track {
   height: 1px;
   background: currentColor;
+  mix-blend-mode: difference;
 }
 
 input[type='range']::-moz-range-track {
   height: 1px;
   background: currentColor;
   border: none;
+  mix-blend-mode: difference;
 }
 
 input[type='range']::-webkit-slider-thumb {
@@ -114,6 +122,7 @@ input[type='range']::-webkit-slider-thumb {
   border-radius: 50%;
   background: currentColor;
   transition: transform 0.15s ease;
+  mix-blend-mode: difference;
 }
 
 input[type='range']::-webkit-slider-thumb:hover {
@@ -127,6 +136,7 @@ input[type='range']::-moz-range-thumb {
   border-radius: 50%;
   background: currentColor;
   transition: transform 0.15s ease;
+  mix-blend-mode: difference;
 }
 
 input[type='range']::-moz-range-thumb:hover {
@@ -143,6 +153,28 @@ input[type='range']:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+
+/*
+  mix-blend-mode against the fixed canvas only composites reliably for
+  content visible without scrolling (the hero). Once scrolled, browsers
+  fail to blend fixed-position backdrops correctly, so these two sections
+  use an explicit light/dark color driven by the measured background
+  brightness (see body.is-light in main.ts) instead of relying on blending.
+*/
+.right-now,
+.about,
+.right-now *,
+.about * {
+  mix-blend-mode: normal;
+  color: #fff;
+}
+
+body.is-light .right-now,
+body.is-light .about,
+body.is-light .right-now *,
+body.is-light .about * {
+  color: #111;
 }
 
 .right-now ul {

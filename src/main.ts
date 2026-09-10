@@ -17,6 +17,13 @@ function resizeCanvas() {
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 
+function getCurrentLocalHour(): number {
+  const now = new Date();
+  const hour = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  return Math.round(hour * 10) / 10;
+}
+slider.value = String(getCurrentLocalHour());
+
 const PARTICLE_COUNT = 300;
 
 interface Particle {
@@ -34,7 +41,7 @@ type ColorKeyframe = {
   color: [number, number, number];
 };
 
-const COLOR_KEYFRAMES: ColorKeyframe[] = [
+const PARTICLE_KEYFRAMES: ColorKeyframe[] = [
   { hour: 0, color: [10, 10, 40] },
   { hour: 6, color: [255, 183, 178] },
   { hour: 12, color: [135, 206, 235] },
@@ -42,21 +49,35 @@ const COLOR_KEYFRAMES: ColorKeyframe[] = [
   { hour: 24, color: [10, 10, 40] },
 ];
 
+const BACKGROUND_KEYFRAMES: ColorKeyframe[] = [
+  { hour: 0, color: [6, 8, 20] },
+  { hour: 6, color: [76, 74, 110] },
+  { hour: 12, color: [176, 214, 235] },
+  { hour: 18, color: [92, 60, 66] },
+  { hour: 24, color: [6, 8, 20] },
+];
+
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-function colorForTime(hour: number): string {
+function interpolateKeyframes(keyframes: ColorKeyframe[], hour: number): [number, number, number] {
   let i = 0;
-  while (i < COLOR_KEYFRAMES.length - 2 && hour > COLOR_KEYFRAMES[i + 1].hour) {
+  while (i < keyframes.length - 2 && hour > keyframes[i + 1].hour) {
     i++;
   }
-  const from = COLOR_KEYFRAMES[i];
-  const to = COLOR_KEYFRAMES[i + 1];
+  const from = keyframes[i];
+  const to = keyframes[i + 1];
   const t = (hour - from.hour) / (to.hour - from.hour);
-  const r = lerp(from.color[0], to.color[0], t);
-  const g = lerp(from.color[1], to.color[1], t);
-  const b = lerp(from.color[2], to.color[2], t);
+  return [
+    lerp(from.color[0], to.color[0], t),
+    lerp(from.color[1], to.color[1], t),
+    lerp(from.color[2], to.color[2], t),
+  ];
+}
+
+function colorForTime(hour: number): string {
+  const [r, g, b] = interpolateKeyframes(PARTICLE_KEYFRAMES, hour);
   return `rgb(${r}, ${g}, ${b})`;
 }
 
@@ -77,10 +98,18 @@ function formatTime(hour: number): string {
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let particleColor = colorForTime(Number(slider.value));
+let backgroundRGB = interpolateKeyframes(BACKGROUND_KEYFRAMES, Number(slider.value));
+
+function luminanceOf([r, g, b]: [number, number, number]): number {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
 
 function updateFromSlider() {
   const hour = Number(slider.value);
   particleColor = colorForTime(hour);
+  backgroundRGB = interpolateKeyframes(BACKGROUND_KEYFRAMES, hour);
+  document.body.style.backgroundColor = `rgb(${backgroundRGB[0]}, ${backgroundRGB[1]}, ${backgroundRGB[2]})`;
+  document.body.classList.toggle('is-light', luminanceOf(backgroundRGB) > 150);
   timeDisplay.textContent = formatTime(hour);
   weatherLabel.textContent = labelForTime(hour);
   slider.setAttribute('aria-valuetext', `${formatTime(hour)}, ${labelForTime(hour)}`);
@@ -102,6 +131,7 @@ if (prefersReducedMotion) {
       y: 40,
       duration: 0.8,
       ease: 'power2.out',
+      clearProps: 'transform',
       scrollTrigger: {
         trigger: section,
         start: 'top 80%',
@@ -115,7 +145,8 @@ function fieldAngle(x: number, y: number, time: number): number {
 }
 
 function drawFrame(time: number) {
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+  const [br, bg, bb] = backgroundRGB;
+  ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, 0.05)`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   ctx.fillStyle = particleColor;
@@ -143,3 +174,41 @@ if (prefersReducedMotion) {
 } else {
   requestAnimationFrame(step);
 }
+
+function weatherLabelFromCode(code: number): string {
+  if (code === 0) return 'Clear';
+  if (code === 1 || code === 2) return 'Partly Cloudy';
+  if (code === 3) return 'Overcast';
+  if (code === 45 || code === 48) return 'Fog';
+  if (code >= 51 && code <= 55) return 'Drizzle';
+  if (code >= 61 && code <= 65) return 'Rain';
+  if (code >= 71 && code <= 75) return 'Snow';
+  if (code >= 80 && code <= 82) return 'Rain Showers';
+  if (code >= 95) return 'Thunderstorm';
+  return 'Unknown';
+}
+
+async function loadCityWeather() {
+  const items = document.querySelectorAll<HTMLLIElement>('#cityList li');
+  await Promise.all(
+    Array.from(items).map(async (li) => {
+      const tempEl = li.querySelector<HTMLSpanElement>('.temp')!;
+      const weatherEl = li.querySelector<HTMLSpanElement>('.weather')!;
+      try {
+        const { lat, lon } = li.dataset;
+        const res = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`,
+        );
+        if (!res.ok) throw new Error('Request failed');
+        const data = await res.json();
+        tempEl.textContent = `${Math.round(data.current_weather.temperature)}°C`;
+        weatherEl.textContent = weatherLabelFromCode(data.current_weather.weathercode);
+      } catch {
+        tempEl.textContent = '--';
+        weatherEl.textContent = 'Unavailable';
+      }
+    }),
+  );
+}
+
+loadCityWeather();
