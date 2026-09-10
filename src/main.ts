@@ -100,16 +100,27 @@ const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)
 let particleColor = colorForTime(Number(slider.value));
 let backgroundRGB = interpolateKeyframes(BACKGROUND_KEYFRAMES, Number(slider.value));
 
-function luminanceOf([r, g, b]: [number, number, number]): number {
-  return 0.299 * r + 0.587 * g + 0.114 * b;
+function srgbChannelToLinear(channel: number): number {
+  const s = channel / 255;
+  return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
 }
+
+// WCAG relative luminance (not a naive weighted average) so the
+// black/white text switch happens exactly where contrast against white
+// and against black cross over (~0.179), guaranteeing the higher-contrast
+// choice is picked at every background color, not just most of them.
+function relativeLuminance([r, g, b]: [number, number, number]): number {
+  return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) + 0.0722 * srgbChannelToLinear(b);
+}
+
+const CONTRAST_CROSSOVER_LUMINANCE = Math.sqrt(1.05 * 0.05) - 0.05;
 
 function updateFromSlider() {
   const hour = Number(slider.value);
   particleColor = colorForTime(hour);
   backgroundRGB = interpolateKeyframes(BACKGROUND_KEYFRAMES, hour);
   document.body.style.backgroundColor = `rgb(${backgroundRGB[0]}, ${backgroundRGB[1]}, ${backgroundRGB[2]})`;
-  document.body.classList.toggle('is-light', luminanceOf(backgroundRGB) > 150);
+  document.body.classList.toggle('is-light', relativeLuminance(backgroundRGB) > CONTRAST_CROSSOVER_LUMINANCE);
   timeDisplay.textContent = formatTime(hour);
   weatherLabel.textContent = labelForTime(hour);
   slider.setAttribute('aria-valuetext', `${formatTime(hour)}, ${labelForTime(hour)}`);

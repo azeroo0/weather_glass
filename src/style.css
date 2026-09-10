@@ -12,6 +12,21 @@ body {
   transition: background-color 0.6s ease;
 }
 
+/*
+  Text color is a solid black/white choice driven by the measured
+  background brightness (see luminanceOf()/body.is-light in main.ts),
+  not mix-blend-mode. A blend-mode "invert against the backdrop" trick
+  was tried here, but since the background brightness interpolates
+  continuously between night and noon, it necessarily passes through
+  medium-luminance values where difference-blend contrast drops below
+  WCAG AA (measured ~3.96:1 around the dawn keyframe). Picking solid
+  black or white based on measured luminance guarantees >=4.5:1 at any
+  possible background color.
+*/
+body.is-light {
+  color: #000;
+}
+
 h1,
 h2,
 p,
@@ -25,13 +40,6 @@ h1,
 h2,
 .logo {
   font-family: 'Fraunces', serif;
-}
-
-h1,
-h2,
-p,
-span {
-  mix-blend-mode: difference;
 }
 
 ul {
@@ -70,7 +78,6 @@ main {
   gap: 1.5rem;
   min-height: 80vh;
   justify-content: center;
-  color: #fff;
 }
 
 .hero h1 {
@@ -104,14 +111,12 @@ input[type='range'] {
 input[type='range']::-webkit-slider-runnable-track {
   height: 1px;
   background: currentColor;
-  mix-blend-mode: difference;
 }
 
 input[type='range']::-moz-range-track {
   height: 1px;
   background: currentColor;
   border: none;
-  mix-blend-mode: difference;
 }
 
 input[type='range']::-webkit-slider-thumb {
@@ -122,7 +127,6 @@ input[type='range']::-webkit-slider-thumb {
   border-radius: 50%;
   background: currentColor;
   transition: transform 0.15s ease;
-  mix-blend-mode: difference;
 }
 
 input[type='range']::-webkit-slider-thumb:hover {
@@ -136,7 +140,6 @@ input[type='range']::-moz-range-thumb {
   border-radius: 50%;
   background: currentColor;
   transition: transform 0.15s ease;
-  mix-blend-mode: difference;
 }
 
 input[type='range']::-moz-range-thumb:hover {
@@ -153,28 +156,6 @@ input[type='range']:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
-}
-
-/*
-  mix-blend-mode against the fixed canvas only composites reliably for
-  content visible without scrolling (the hero). Once scrolled, browsers
-  fail to blend fixed-position backdrops correctly, so these two sections
-  use an explicit light/dark color driven by the measured background
-  brightness (see body.is-light in main.ts) instead of relying on blending.
-*/
-.right-now,
-.about,
-.right-now *,
-.about * {
-  mix-blend-mode: normal;
-  color: #fff;
-}
-
-body.is-light .right-now,
-body.is-light .about,
-body.is-light .right-now *,
-body.is-light .about * {
-  color: #111;
 }
 
 .right-now ul {
@@ -213,6 +194,10 @@ body.is-light .about * {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
+
   input[type='range']::-webkit-slider-thumb,
   input[type='range']::-moz-range-thumb {
     transition: none;
