@@ -182,15 +182,69 @@ input[type='range']:focus-visible {
   outline-offset: 6px;
 }
 
-.right-now,
-.about {
+.right-now {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
 }
 
-.about p {
+/*
+  Full-bleed tinted band: position:relative + z-index:0 gives .about its
+  own stacking context, so the ::before overlay (z-index:-1 *within that
+  context*) paints in front of the fixed #flowCanvas (z-index:-1 at the
+  root) but behind .about's own text - without touching the hero/right-now
+  sections above and below it.
+*/
+.about {
+  position: relative;
+  z-index: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  padding: clamp(2.5rem, 6vw, 4rem) 0;
+}
+
+.about::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  background: rgba(244, 241, 236, 0.55);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.about-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.about-kicker {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.about-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.about-content p {
   max-width: none;
+}
+
+@media (min-width: 1024px) {
+  .about {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+    gap: 4rem;
+    align-items: start;
+  }
 }
 
 .right-now ul {
