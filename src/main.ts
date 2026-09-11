@@ -231,6 +231,7 @@ function applyWeatherToFlowField(weather: CityWeather | undefined) {
     flowBias = { x: 0, y: 0 };
     flowTurbulence = 0;
     cloudDarkenFactor = 1;
+    updateCursorColor();
     return;
   }
 
@@ -244,6 +245,7 @@ function applyWeatherToFlowField(weather: CityWeather | undefined) {
 
   flowTurbulence = clamp(weather.precipitation * 0.15, 0, 1.2);
   cloudDarkenFactor = 1 - clamp(weather.cloudcover / 100, 0, 1) * 0.35;
+  updateCursorColor();
 }
 
 function effectiveBackgroundRGB(hour: number): [number, number, number] {
@@ -870,3 +872,65 @@ document.addEventListener('click', (event) => {
     closeSearchResults();
   }
 });
+
+// --- Custom cursor ---
+// A small dot that eases toward the pointer and picks up the current
+// weather mode's tint. `updateCursorColor` is called from
+// applyWeatherToFlowField above; being a hoisted function declaration,
+// it's safe to reference there even though it's defined below - by the
+// time weather data actually arrives and calls it, the whole module
+// (including this block) has already finished its initial synchronous run.
+const cursorDot = document.querySelector<HTMLDivElement>('#cursorDot')!;
+const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
+
+function updateCursorColor() {
+  cursorDot.style.backgroundColor = rgbString(MODE_TINT[currentWeatherMode].color);
+}
+
+if (!isTouchDevice) {
+  cursorDot.hidden = false;
+  document.body.classList.add('has-custom-cursor');
+  updateCursorColor();
+
+  const CURSOR_EASE = 0.2;
+  const CURSOR_HOVER_SCALE = 2;
+  let cursorX = window.innerWidth / 2;
+  let cursorY = window.innerHeight / 2;
+  let targetX = cursorX;
+  let targetY = cursorY;
+  let cursorScale = 1;
+  let targetScale = 1;
+
+  const isInteractiveTarget = (el: Element | null) =>
+    !!el?.closest('a, button, input, label, [role="button"], [role="option"]');
+
+  const renderCursor = () => {
+    cursorDot.style.transform = `translate3d(${cursorX}px, ${cursorY}px, 0) translate(-50%, -50%) scale(${cursorScale})`;
+  };
+  renderCursor();
+
+  function stepCursor() {
+    cursorX += (targetX - cursorX) * CURSOR_EASE;
+    cursorY += (targetY - cursorY) * CURSOR_EASE;
+    cursorScale += (targetScale - cursorScale) * CURSOR_EASE;
+    renderCursor();
+    requestAnimationFrame(stepCursor);
+  }
+
+  document.addEventListener('mousemove', (event) => {
+    targetX = event.clientX;
+    targetY = event.clientY;
+    targetScale = isInteractiveTarget(event.target as Element | null) ? CURSOR_HOVER_SCALE : 1;
+
+    if (prefersReducedMotion) {
+      cursorX = targetX;
+      cursorY = targetY;
+      cursorScale = targetScale;
+      renderCursor();
+    }
+  });
+
+  if (!prefersReducedMotion) {
+    requestAnimationFrame(stepCursor);
+  }
+}

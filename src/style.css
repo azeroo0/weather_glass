@@ -56,6 +56,30 @@ p {
   z-index: -1;
 }
 
+/*
+  The dot's own position/size never come from top/left - it stays at
+  (0,0) and every frame gets a fresh `translate3d(x, y, 0) translate(-50%,
+  -50%) scale(s)` from JS, so this rule only needs to set its resting
+  appearance. Hiding the native cursor is scoped to a class the JS adds
+  only when a custom cursor is actually running (never on touch).
+*/
+.cursor-dot {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgb(150, 155, 165);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+body.has-custom-cursor,
+body.has-custom-cursor * {
+  cursor: none !important;
+}
+
 nav {
   padding: 1.5rem 2rem;
 }
