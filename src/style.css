@@ -188,6 +188,86 @@ input[type='range']:focus-visible {
   gap: 1.5rem;
 }
 
+.city-search {
+  position: relative;
+}
+
+.city-search-input {
+  all: unset;
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  font: inherit;
+  color: inherit;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid currentColor;
+  opacity: 0.9;
+}
+
+.city-search-input::placeholder {
+  color: currentColor;
+  opacity: 0.55;
+}
+
+.city-search-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.city-search-input:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
+.city-search-results {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  z-index: 2;
+  width: 100%;
+  max-width: 320px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 0.75rem;
+  box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.2);
+}
+
+.city-search-result {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 0.15rem;
+  padding: 0.6rem 0.9rem;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.city-search-result:hover,
+.city-search-result:focus-visible {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.city-search-result-name {
+  font-size: 0.95rem;
+}
+
+.city-search-result-meta {
+  font-size: 0.78rem;
+  opacity: 0.7;
+}
+
+.city-search-hint {
+  font-size: 0.78rem;
+  opacity: 0.6;
+  margin-top: 0.4rem;
+}
+
 /*
   Full-bleed tinted band: position:relative + z-index:0 gives .about its
   own stacking context, so the ::before overlay (z-index:-1 *within that
@@ -253,16 +333,51 @@ input[type='range']:focus-visible {
   gap: 0.75rem;
 }
 
+.city-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .city-button {
   all: unset;
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 1.5rem;
-  width: 100%;
   font: inherit;
   color: inherit;
   cursor: pointer;
+}
+
+.city-remove {
+  all: unset;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.city-remove:hover,
+.city-remove:focus-visible {
+  opacity: 1;
+  background-color: rgba(127, 127, 127, 0.18);
+}
+
+.city-remove:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 
 .weather-icon {

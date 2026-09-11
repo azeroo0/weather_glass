@@ -560,10 +560,19 @@ function renderLastUpdated() {
 
 setInterval(renderLastUpdated, 30000);
 
-const cityButtons = document.querySelectorAll<HTMLButtonElement>('.city-button');
+const cityListEl = document.querySelector<HTMLUListElement>('#cityList')!;
+const citySearchInput = document.querySelector<HTMLInputElement>('#citySearchInput')!;
+const citySearchResults = document.querySelector<HTMLUListElement>('#citySearchResults')!;
+const citySearchHint = document.querySelector<HTMLParagraphElement>('#citySearchHint')!;
+
+const MAX_CITIES = 8;
+
+function getCityButtons(): HTMLButtonElement[] {
+  return Array.from(cityListEl.querySelectorAll<HTMLButtonElement>('.city-button'));
+}
 
 function updateCitySelectionUI() {
-  cityButtons.forEach((button) => {
+  getCityButtons().forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.name === selectedCityName));
   });
 }
@@ -585,88 +594,279 @@ function selectCity(name: string) {
   }
 }
 
-cityButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    const name = button.dataset.name;
+function updateSearchAvailability() {
+  const count = getCityButtons().length;
+  const atMax = count >= MAX_CITIES;
+  citySearchInput.disabled = atMax;
+  citySearchInput.placeholder = atMax ? '최대 8개까지 추가했어요' : '도시 검색 후 추가';
+  citySearchHint.textContent = `${count} / ${MAX_CITIES}개 도시`;
+}
+
+function createCityListItem(name: string, lat: number, lon: number, removable: boolean): HTMLLIElement {
+  const li = document.createElement('li');
+  li.className = 'city-item';
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'city-button';
+  button.dataset.name = name;
+  button.dataset.lat = String(lat);
+  button.dataset.lon = String(lon);
+  button.setAttribute('aria-pressed', 'false');
+  button.innerHTML = `
+    <span class="weather-icon" aria-hidden="true"></span>
+    <span class="city"></span><span class="temp">--</span><span class="weather">Loading…</span>
+    <span class="wind">
+      <svg class="wind-arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 L11.5 9 L8 7 L4.5 9 Z" fill="currentColor" /></svg>
+      <span class="wind-value"></span>
+    </span>
+    <span class="precip" hidden>
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2C8 2 3.5 8 3.5 11a4.5 4.5 0 0 0 9 0C12.5 8 8 2 8 2Z" fill="currentColor" /></svg>
+      <span class="precip-value"></span>
+    </span>
+  `;
+  // Set via textContent, not innerHTML, since `name` comes from the
+  // geocoding API and must not be parsed as markup.
+  button.querySelector('.city')!.textContent = name;
+  li.appendChild(button);
+
+  if (removable) {
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'city-remove';
+    removeButton.dataset.name = name;
+    removeButton.setAttribute('aria-label', `${name} 삭제`);
+    removeButton.textContent = '×';
+    li.appendChild(removeButton);
+  }
+
+  return li;
+}
+
+function removeCity(name: string, li: HTMLLIElement) {
+  li.remove();
+  cityWeatherByName.delete(name);
+  if (selectedCityName === name) {
+    const fallback = getCityButtons()[0]?.dataset.name;
+    if (fallback) selectCity(fallback);
+  }
+  updateSearchAvailability();
+}
+
+cityListEl.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement;
+
+  const removeButton = target.closest<HTMLButtonElement>('.city-remove');
+  if (removeButton) {
+    const li = removeButton.closest('li');
+    const name = removeButton.dataset.name;
+    if (li && name) removeCity(name, li);
+    return;
+  }
+
+  const cityButton = target.closest<HTMLButtonElement>('.city-button');
+  if (cityButton) {
+    const name = cityButton.dataset.name;
     if (name && cityWeatherByName.has(name)) {
       selectCity(name);
     }
-  });
+  }
 });
 
-async function loadCityWeather() {
-  await Promise.all(
-    Array.from(cityButtons).map(async (button) => {
-      const iconEl = button.querySelector<HTMLSpanElement>('.weather-icon')!;
-      const tempEl = button.querySelector<HTMLSpanElement>('.temp')!;
-      const weatherEl = button.querySelector<HTMLSpanElement>('.weather')!;
-      const windEl = button.querySelector<HTMLSpanElement>('.wind')!;
-      const windArrowEl = button.querySelector<SVGElement>('.wind-arrow')!;
-      const windValueEl = button.querySelector<HTMLSpanElement>('.wind-value')!;
-      const precipEl = button.querySelector<HTMLSpanElement>('.precip')!;
-      const precipValueEl = button.querySelector<HTMLSpanElement>('.precip-value')!;
-      const name = button.dataset.name!;
-      try {
-        const { lat, lon } = button.dataset;
-        const res = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,windspeed_10m,winddirection_10m,precipitation,cloudcover,weathercode`,
-        );
-        if (!res.ok) throw new Error('Request failed');
-        const data = await res.json();
-        const current = data.current;
-        cityWeatherByName.set(name, {
-          name,
-          temperature: current.temperature_2m,
-          windspeed: current.windspeed_10m,
-          winddirection: current.winddirection_10m,
-          precipitation: current.precipitation,
-          cloudcover: current.cloudcover,
-          weathercode: current.weathercode,
-        });
-        tempEl.textContent = `${Math.round(current.temperature_2m)}°C`;
-        weatherEl.textContent = weatherLabelFromCode(current.weathercode);
-        iconEl.innerHTML = weatherModeIcon(weatherModeFromCode(current.weathercode));
+async function fetchAndRenderCityWeather(button: HTMLButtonElement) {
+  const iconEl = button.querySelector<HTMLSpanElement>('.weather-icon')!;
+  const tempEl = button.querySelector<HTMLSpanElement>('.temp')!;
+  const weatherEl = button.querySelector<HTMLSpanElement>('.weather')!;
+  const windEl = button.querySelector<HTMLSpanElement>('.wind')!;
+  const windArrowEl = button.querySelector<SVGElement>('.wind-arrow')!;
+  const windValueEl = button.querySelector<HTMLSpanElement>('.wind-value')!;
+  const precipEl = button.querySelector<HTMLSpanElement>('.precip')!;
+  const precipValueEl = button.querySelector<HTMLSpanElement>('.precip-value')!;
+  const name = button.dataset.name!;
+  try {
+    const { lat, lon } = button.dataset;
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,windspeed_10m,winddirection_10m,precipitation,cloudcover,weathercode`,
+    );
+    if (!res.ok) throw new Error('Request failed');
+    const data = await res.json();
+    const current = data.current;
+    cityWeatherByName.set(name, {
+      name,
+      temperature: current.temperature_2m,
+      windspeed: current.windspeed_10m,
+      winddirection: current.winddirection_10m,
+      precipitation: current.precipitation,
+      cloudcover: current.cloudcover,
+      weathercode: current.weathercode,
+    });
+    tempEl.textContent = `${Math.round(current.temperature_2m)}°C`;
+    weatherEl.textContent = weatherLabelFromCode(current.weathercode);
+    iconEl.innerHTML = weatherModeIcon(weatherModeFromCode(current.weathercode));
 
-        // Point the arrow the same way the wind actually pushes the flow
-        // field (see applyWeatherToFlowField's flowBearing), not the raw
-        // meteorological "from" direction, so the icon and the hero
-        // animation agree with each other.
-        const flowBearing = (current.winddirection_10m + 180) % 360;
-        windArrowEl.style.transform = `rotate(${flowBearing}deg)`;
-        windValueEl.textContent = `${Math.round(current.windspeed_10m)}km/h`;
+    // Point the arrow the same way the wind actually pushes the flow
+    // field (see applyWeatherToFlowField's flowBearing), not the raw
+    // meteorological "from" direction, so the icon and the hero
+    // animation agree with each other.
+    const flowBearing = (current.winddirection_10m + 180) % 360;
+    windArrowEl.style.transform = `rotate(${flowBearing}deg)`;
+    windValueEl.textContent = `${Math.round(current.windspeed_10m)}km/h`;
 
-        if (current.precipitation > 0.05) {
-          precipEl.hidden = false;
-          const roundedPrecip = Math.round(current.precipitation * 10) / 10;
-          precipValueEl.textContent = `${roundedPrecip}mm`;
-        } else {
-          precipEl.hidden = true;
-        }
+    if (current.precipitation > 0.05) {
+      precipEl.hidden = false;
+      const roundedPrecip = Math.round(current.precipitation * 10) / 10;
+      precipValueEl.textContent = `${roundedPrecip}mm`;
+    } else {
+      precipEl.hidden = true;
+    }
 
-        console.log(`[weather] ${name}:`, {
-          temperature: current.temperature_2m,
-          windspeed: current.windspeed_10m,
-          weathercode: current.weathercode,
-        });
-      } catch {
-        tempEl.textContent = '--';
-        weatherEl.textContent = 'Unavailable';
-        windEl.hidden = true;
-        precipEl.hidden = true;
-      }
-    }),
-  );
+    console.log(`[weather] ${name}:`, {
+      temperature: current.temperature_2m,
+      windspeed: current.windspeed_10m,
+      weathercode: current.weathercode,
+    });
 
-  if (cityWeatherByName.size > 0) {
     lastFetchTime = new Date();
     renderLastUpdated();
+  } catch {
+    tempEl.textContent = '--';
+    weatherEl.textContent = 'Unavailable';
+    windEl.hidden = true;
+    precipEl.hidden = true;
   }
+}
 
-  const defaultCity = cityButtons[0]?.dataset.name;
+async function loadCityWeather() {
+  await Promise.all(getCityButtons().map(fetchAndRenderCityWeather));
+
+  const defaultCity = getCityButtons()[0]?.dataset.name;
   const firstAvailable = defaultCity && cityWeatherByName.has(defaultCity) ? defaultCity : [...cityWeatherByName.keys()][0];
   if (firstAvailable) {
     selectCity(firstAvailable);
   }
+
+  updateSearchAvailability();
 }
 
 loadCityWeather();
+
+// --- City search (Open-Meteo Geocoding API) ---
+
+interface GeocodingResult {
+  id: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  country?: string;
+  admin1?: string;
+}
+
+let searchDebounceTimer: number | undefined;
+let searchAbortController: AbortController | null = null;
+
+function closeSearchResults() {
+  citySearchResults.hidden = true;
+  citySearchResults.innerHTML = '';
+  citySearchInput.setAttribute('aria-expanded', 'false');
+}
+
+function addCity(result: GeocodingResult) {
+  citySearchInput.value = '';
+  closeSearchResults();
+
+  const existing = getCityButtons().find((button) => button.dataset.name === result.name);
+  if (existing) {
+    selectCity(result.name);
+    return;
+  }
+
+  if (getCityButtons().length >= MAX_CITIES) {
+    updateSearchAvailability();
+    return;
+  }
+
+  const li = createCityListItem(result.name, result.latitude, result.longitude, true);
+  cityListEl.appendChild(li);
+  updateSearchAvailability();
+
+  const button = li.querySelector<HTMLButtonElement>('.city-button')!;
+  fetchAndRenderCityWeather(button).then(() => selectCity(result.name));
+}
+
+function renderSearchResults(results: GeocodingResult[]) {
+  citySearchResults.innerHTML = '';
+
+  if (results.length === 0) {
+    closeSearchResults();
+    return;
+  }
+
+  results.forEach((result) => {
+    const li = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'city-search-result';
+    button.setAttribute('role', 'option');
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'city-search-result-name';
+    nameEl.textContent = result.name;
+    button.appendChild(nameEl);
+
+    const locationParts = [result.admin1, result.country].filter(Boolean);
+    if (locationParts.length > 0) {
+      const metaEl = document.createElement('span');
+      metaEl.className = 'city-search-result-meta';
+      metaEl.textContent = locationParts.join(', ');
+      button.appendChild(metaEl);
+    }
+
+    button.addEventListener('click', () => addCity(result));
+    li.appendChild(button);
+    citySearchResults.appendChild(li);
+  });
+
+  citySearchResults.hidden = false;
+  citySearchInput.setAttribute('aria-expanded', 'true');
+}
+
+async function searchCities(query: string) {
+  searchAbortController?.abort();
+  const controller = new AbortController();
+  searchAbortController = controller;
+  try {
+    const res = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=6&language=ko`,
+      { signal: controller.signal },
+    );
+    if (!res.ok) throw new Error('Search failed');
+    const data = await res.json();
+    renderSearchResults((data.results ?? []) as GeocodingResult[]);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return;
+    closeSearchResults();
+  }
+}
+
+citySearchInput.addEventListener('input', () => {
+  const query = citySearchInput.value.trim();
+  window.clearTimeout(searchDebounceTimer);
+  if (query.length < 2) {
+    closeSearchResults();
+    return;
+  }
+  searchDebounceTimer = window.setTimeout(() => searchCities(query), 300);
+});
+
+citySearchInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeSearchResults();
+  }
+});
+
+document.addEventListener('click', (event) => {
+  if (!(event.target instanceof Node)) return;
+  if (!citySearchInput.closest('.city-search')?.contains(event.target)) {
+    closeSearchResults();
+  }
+});

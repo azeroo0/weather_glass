@@ -42,8 +42,22 @@
 
       <section class="right-now fade-up">
         <h2>Right now</h2>
+        <div class="city-search">
+          <input
+            type="text"
+            id="citySearchInput"
+            class="city-search-input"
+            placeholder="도시 검색 후 추가"
+            autocomplete="off"
+            aria-label="도시 검색"
+            aria-expanded="false"
+            aria-controls="citySearchResults"
+          />
+          <ul id="citySearchResults" class="city-search-results" role="listbox" hidden></ul>
+          <p id="citySearchHint" class="city-search-hint"></p>
+        </div>
         <ul id="cityList">
-          <li>
+          <li class="city-item">
             <button type="button" class="city-button" data-name="Seoul" data-lat="37.5665" data-lon="126.978" aria-pressed="false">
               <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">Seoul</span><span class="temp">--</span><span class="weather">Loading…</span>
@@ -57,7 +71,7 @@
               </span>
             </button>
           </li>
-          <li>
+          <li class="city-item">
             <button type="button" class="city-button" data-name="London" data-lat="51.5074" data-lon="-0.1278" aria-pressed="false">
               <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">London</span><span class="temp">--</span><span class="weather">Loading…</span>
@@ -71,7 +85,7 @@
               </span>
             </button>
           </li>
-          <li>
+          <li class="city-item">
             <button type="button" class="city-button" data-name="Bangkok" data-lat="13.7563" data-lon="100.5018" aria-pressed="false">
               <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">Bangkok</span><span class="temp">--</span><span class="weather">Loading…</span>
@@ -85,7 +99,7 @@
               </span>
             </button>
           </li>
-          <li>
+          <li class="city-item">
             <button type="button" class="city-button" data-name="Vancouver" data-lat="49.2827" data-lon="-123.1207" aria-pressed="false">
               <span class="weather-icon" aria-hidden="true"></span>
               <span class="city">Vancouver</span><span class="temp">--</span><span class="weather">Loading…</span>
