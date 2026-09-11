@@ -80,13 +80,65 @@ body.has-custom-cursor * {
   cursor: none !important;
 }
 
-nav {
-  padding: 1.5rem 2rem;
+/*
+  Fixed nav needs its own scrim now that pinned, fullscreen chapters
+  scroll directly underneath it - a plain transparent bar would lose
+  legibility against whatever color the flow field currently is.
+*/
+.site-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 2rem;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .logo {
   font-size: 1.25rem;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.chapter-nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  justify-content: flex-end;
+}
+
+.chapter-nav-button {
+  all: unset;
+  font: inherit;
+  color: inherit;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.chapter-nav-button:hover,
+.chapter-nav-button:focus-visible {
+  opacity: 0.85;
+}
+
+.chapter-nav-button.is-active {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.chapter-nav-button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
 }
 
 main {
@@ -96,33 +148,97 @@ main {
   padding: 0 2rem clamp(4rem, 10vw, 8rem);
 }
 
-.hero {
+.intro {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
-  min-height: 80vh;
+  min-height: 60vh;
   justify-content: center;
+  padding-top: 5rem;
 }
 
-.city-label {
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: -0.75rem;
-}
-
-.hero h1 {
+.intro h1 {
   font-size: clamp(2.75rem, 7vw, 5.5rem);
   line-height: 1.05;
   letter-spacing: -0.02em;
   font-weight: 600;
 }
 
-.hero p {
+.intro p {
   font-size: 1.125rem;
 }
 
-.hero .time-info {
+/*
+  Chapters are meant to be full-bleed, so this cancels out main's side
+  padding just for this one container; .chapter-inner re-applies its own
+  inset so the text itself doesn't touch the screen edges.
+*/
+.chapters {
+  margin: 0 -2rem;
+}
+
+.chapter {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.chapter-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: center;
+  padding: 0 2rem;
+}
+
+.chapter-condition {
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.85;
+}
+
+.chapter-city {
+  font-size: clamp(3rem, 9vw, 7rem);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.chapter-temp {
+  font-size: clamp(2rem, 6vw, 4rem);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+.explore {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(4rem, 10vw, 8rem);
+}
+
+.explore-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.explore-kicker {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.explore-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.time-info {
   display: flex;
   gap: 1rem;
   font-size: 0.95rem;
@@ -206,7 +322,7 @@ input[type='range']:focus-visible {
   outline-offset: 6px;
 }
 
-.right-now {
+.city-search-section {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
@@ -292,12 +408,15 @@ input[type='range']:focus-visible {
   margin-top: 0.4rem;
 }
 
+.last-updated {
+  font-size: 0.85rem;
+}
+
 /*
   Full-bleed tinted band: position:relative + z-index:0 gives .about its
   own stacking context, so the ::before overlay (z-index:-1 *within that
   context*) paints in front of the fixed #flowCanvas (z-index:-1 at the
-  root) but behind .about's own text - without touching the hero/right-now
-  sections above and below it.
+  root) but behind .about's own text.
 */
 .about {
   position: relative;
@@ -351,109 +470,17 @@ input[type='range']:focus-visible {
   }
 }
 
-.right-now ul {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.city-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.city-button {
-  all: unset;
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1.5rem;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-
-.city-remove {
-  all: unset;
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-size: 0.95rem;
-  line-height: 1;
-  color: inherit;
-  opacity: 0.55;
-  cursor: pointer;
-  transition: opacity 0.15s ease, background-color 0.15s ease;
-}
-
-.city-remove:hover,
-.city-remove:focus-visible {
-  opacity: 1;
-  background-color: rgba(127, 127, 127, 0.18);
-}
-
-.city-remove:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
-}
-
-.weather-icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-.weather-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.wind,
-.precip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-
-.wind svg,
-.precip svg {
-  width: 11px;
-  height: 11px;
-  flex-shrink: 0;
-}
-
-.wind-arrow {
-  transition: transform 0.3s ease;
-}
-
-.city-button:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 4px;
-}
-
-.city-button[aria-pressed='true'] .city {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
-
-.last-updated {
-  font-size: 0.85rem;
-}
-
 @media (max-width: 480px) {
-  nav {
+  .site-nav {
     padding: 1rem 1.25rem;
+  }
+
+  .chapter-nav-list {
+    gap: 0.2rem 0.75rem;
+  }
+
+  .chapter-nav-button {
+    font-size: 0.72rem;
   }
 
   main {
@@ -461,27 +488,20 @@ input[type='range']:focus-visible {
     gap: clamp(3rem, 12vw, 5rem);
   }
 
-  .hero h1 {
+  .chapters {
+    margin: 0 -1.25rem;
+  }
+
+  .intro h1 {
     font-size: clamp(2.25rem, 9vw, 3rem);
   }
 
-  .hero .time-info {
+  .time-info {
     flex-wrap: wrap;
   }
 
   .slider-row {
     flex-wrap: wrap;
-  }
-
-  .city-button {
-    gap: 0.3rem 0.4rem;
-    font-size: 0.78rem;
-  }
-
-  .wind,
-  .precip {
-    font-size: 0.7rem;
-    gap: 0.15rem;
   }
 
   input[type='range'] {
@@ -496,10 +516,6 @@ input[type='range']:focus-visible {
 
   input[type='range']::-webkit-slider-thumb,
   input[type='range']::-moz-range-thumb {
-    transition: none;
-  }
-
-  .wind-arrow {
     transition: none;
   }
 }

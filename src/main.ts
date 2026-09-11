@@ -8,7 +8,6 @@ const canvas = document.querySelector<HTMLCanvasElement>('#flowCanvas')!;
 const slider = document.querySelector<HTMLInputElement>('#timeSlider')!;
 const timeDisplay = document.querySelector<HTMLSpanElement>('#currentTime')!;
 const weatherLabel = document.querySelector<HTMLSpanElement>('#weatherLabel')!;
-const cityLabel = document.querySelector<HTMLSpanElement>('#cityLabel')!;
 const lastUpdatedEl = document.querySelector<HTMLParagraphElement>('#lastUpdated')!;
 const playButton = document.querySelector<HTMLButtonElement>('#playButton')!;
 const ctx = canvas.getContext('2d')!;
@@ -144,8 +143,9 @@ const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)
 
 // Role split: the time slider only drives day/night ambient brightness
 // (particle hue + background color keyframes above). Flow *dynamics* -
-// speed, direction bias, turbulence - come entirely from the selected
-// city's live weather, applied below.
+// speed, direction bias, turbulence - come entirely from each chapter's
+// city weather, blended continuously as the user scrolls (see
+// WeatherSnapshot below).
 interface CityWeather {
   name: string;
   temperature: number;
@@ -156,13 +156,10 @@ interface CityWeather {
   weathercode: number;
 }
 
-const cityWeatherByName = new Map<string, CityWeather>();
-let selectedCityName: string | null = null;
-
-// WMO weathercode -> which rendering mode the flow field uses. Each mode
-// has its own particle shape AND motion logic (see drawSunnyParticle /
-// drawCloudyParticle / drawRainParticle below) - this isn't just a
-// parameter tweak, it's a different visual language per weather type.
+// WMO weathercode -> which "shape language" the flow field blends toward.
+// Rendering never snaps discretely between these - see WeatherSnapshot's
+// modeWeights, which interpolate continuously between two cities' one-hot
+// vectors as the user scrubs through a chapter.
 type WeatherMode = 'sunny' | 'cloudy' | 'rainy';
 
 function weatherModeFromCode(code: number): WeatherMode {
@@ -170,40 +167,6 @@ function weatherModeFromCode(code: number): WeatherMode {
   if (code === 2 || code === 3 || code === 45 || code === 48) return 'cloudy';
   if ((code >= 51 && code <= 67) || (code >= 80 && code <= 99)) return 'rainy';
   return 'cloudy';
-}
-
-// Small decorative glyphs for the "Right now" list, independent of the
-// hero canvas's currently-selected city - each reflects that row's own
-// weathercode-derived mode.
-const MODE_ICON: Record<WeatherMode, string> = {
-  sunny: `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="8" cy="8" r="3.2" fill="#ffd23c" />
-    <g stroke="#ffd23c" stroke-width="1.2" stroke-linecap="round">
-      <line x1="8" y1="0.8" x2="8" y2="2.4" />
-      <line x1="8" y1="13.6" x2="8" y2="15.2" />
-      <line x1="0.8" y1="8" x2="2.4" y2="8" />
-      <line x1="13.6" y1="8" x2="15.2" y2="8" />
-      <line x1="2.7" y1="2.7" x2="3.8" y2="3.8" />
-      <line x1="12.2" y1="12.2" x2="13.3" y2="13.3" />
-      <line x1="2.7" y1="13.3" x2="3.8" y2="12.2" />
-      <line x1="12.2" y1="3.8" x2="13.3" y2="2.7" />
-    </g>
-  </svg>`,
-  cloudy: `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-    <path d="M4.6 11.5a3 3 0 0 1-.5-5.95 3.5 3.5 0 0 1 6.7-1.3A3 3 0 0 1 12.4 11.5z" fill="#aab0ba" />
-  </svg>`,
-  rainy: `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-    <path d="M4.1 8.6a2.5 2.5 0 0 1-.4-4.97A3 3 0 0 1 9.2 2.2 2.5 2.5 0 0 1 12 4.5 2.5 2.5 0 0 1 11.5 9.5H4.1z" fill="#5b7ca3" />
-    <g stroke="#5b7ca3" stroke-width="1.2" stroke-linecap="round">
-      <line x1="5" y1="11" x2="4.3" y2="13.2" />
-      <line x1="8" y1="11" x2="7.3" y2="13.2" />
-      <line x1="11" y1="11" x2="10.3" y2="13.2" />
-    </g>
-  </svg>`,
-};
-
-function weatherModeIcon(mode: WeatherMode): string {
-  return MODE_ICON[mode];
 }
 
 const MODE_PARTICLE_COUNT: Record<WeatherMode, number> = {
@@ -215,9 +178,8 @@ const MODE_PARTICLE_COUNT: Record<WeatherMode, number> = {
 // How fast each frame's fade-to-background overlay erases the previous
 // frame. Sunny/cloudy need a quick wipe so particles read as discrete
 // dots/blobs; rain keeps a slow wipe so its streaks accumulate into
-// visible sheets of rain. Declared early: reduced-motion calls drawFrame()
-// synchronously during the initial updateFromSlider(), before the bottom
-// of this module has executed.
+// visible sheets of rain. Blended continuously via WeatherSnapshot, same
+// as everything else below.
 const TRAIL_FADE_ALPHA: Record<WeatherMode, number> = {
   sunny: 0.3,
   cloudy: 0.18,
@@ -235,40 +197,91 @@ const MODE_TINT: Record<WeatherMode, { color: [number, number, number]; strength
   rainy: { color: [15, 20, 50], strength: 0.35 },
 };
 
-function resolveParticleColor(mode: WeatherMode, base: [number, number, number]): [number, number, number] {
-  const tint = MODE_TINT[mode];
-  return mixColor(base, tint.color, tint.strength);
+const MODE_INDEX: Record<WeatherMode, 0 | 1 | 2> = { sunny: 0, cloudy: 1, rainy: 2 };
+
+// A fully-resolved "what the flow field should look like" for one city.
+// Every field here is a plain number/vector so two snapshots can be
+// linearly interpolated (see blendSnapshots) - that continuous blend, not
+// a fade between two rendered frames, is what makes a chapter transition
+// actually change the particles' color/shape/speed/density as you scroll.
+interface WeatherSnapshot {
+  modeWeights: [number, number, number]; // [sunny, cloudy, rainy]
+  flowSpeed: number;
+  flowBias: { x: number; y: number };
+  flowTurbulence: number;
+  cloudDarkenFactor: number;
+  tintColor: [number, number, number];
+  tintStrength: number;
+  particleCount: number;
+  trailFadeAlpha: number;
 }
 
-let currentWeatherMode: WeatherMode = 'cloudy';
-let flowSpeed = 1.5;
-let flowBias = { x: 0, y: 0 };
-let flowTurbulence = 0;
-let cloudDarkenFactor = 1;
+const DEFAULT_SNAPSHOT: WeatherSnapshot = {
+  modeWeights: [0, 1, 0],
+  flowSpeed: 1.5,
+  flowBias: { x: 0, y: 0 },
+  flowTurbulence: 0,
+  cloudDarkenFactor: 1,
+  tintColor: MODE_TINT.cloudy.color,
+  tintStrength: MODE_TINT.cloudy.strength,
+  particleCount: MODE_PARTICLE_COUNT.cloudy,
+  trailFadeAlpha: TRAIL_FADE_ALPHA.cloudy,
+};
 
-function applyWeatherToFlowField(weather: CityWeather | undefined) {
-  if (!weather) {
-    currentWeatherMode = 'cloudy';
-    flowSpeed = 1.5;
-    flowBias = { x: 0, y: 0 };
-    flowTurbulence = 0;
-    cloudDarkenFactor = 1;
-    updateCursorColor();
-    return;
-  }
+function computeSnapshot(weather: CityWeather | undefined): WeatherSnapshot {
+  if (!weather) return DEFAULT_SNAPSHOT;
 
-  currentWeatherMode = weatherModeFromCode(weather.weathercode);
-  flowSpeed = clamp(0.4 + weather.windspeed * 0.06, 0.4, 4.5);
+  const mode = weatherModeFromCode(weather.weathercode);
+  const modeWeights: [number, number, number] = [0, 0, 0];
+  modeWeights[MODE_INDEX[mode]] = 1;
 
+  const flowSpeed = clamp(0.4 + weather.windspeed * 0.06, 0.4, 4.5);
   const biasStrength = clamp(weather.windspeed / 20, 0.15, 1.5);
   const flowBearing = (weather.winddirection + 180) % 360; // wind blows TOWARD this bearing
   const biasAngle = ((flowBearing - 90) * Math.PI) / 180; // meteorological bearing -> canvas angle
-  flowBias = { x: Math.cos(biasAngle) * biasStrength, y: Math.sin(biasAngle) * biasStrength };
+  const flowBias = { x: Math.cos(biasAngle) * biasStrength, y: Math.sin(biasAngle) * biasStrength };
+  const flowTurbulence = clamp(weather.precipitation * 0.15, 0, 1.2);
+  const cloudDarkenFactor = 1 - clamp(weather.cloudcover / 100, 0, 1) * 0.35;
 
-  flowTurbulence = clamp(weather.precipitation * 0.15, 0, 1.2);
-  cloudDarkenFactor = 1 - clamp(weather.cloudcover / 100, 0, 1) * 0.35;
-  updateCursorColor();
+  return {
+    modeWeights,
+    flowSpeed,
+    flowBias,
+    flowTurbulence,
+    cloudDarkenFactor,
+    tintColor: MODE_TINT[mode].color,
+    tintStrength: MODE_TINT[mode].strength,
+    particleCount: MODE_PARTICLE_COUNT[mode],
+    trailFadeAlpha: TRAIL_FADE_ALPHA[mode],
+  };
 }
+
+function blendSnapshots(a: WeatherSnapshot, b: WeatherSnapshot, t: number): WeatherSnapshot {
+  return {
+    modeWeights: [
+      lerp(a.modeWeights[0], b.modeWeights[0], t),
+      lerp(a.modeWeights[1], b.modeWeights[1], t),
+      lerp(a.modeWeights[2], b.modeWeights[2], t),
+    ],
+    flowSpeed: lerp(a.flowSpeed, b.flowSpeed, t),
+    flowBias: { x: lerp(a.flowBias.x, b.flowBias.x, t), y: lerp(a.flowBias.y, b.flowBias.y, t) },
+    flowTurbulence: lerp(a.flowTurbulence, b.flowTurbulence, t),
+    cloudDarkenFactor: lerp(a.cloudDarkenFactor, b.cloudDarkenFactor, t),
+    tintColor: mixColor(a.tintColor, b.tintColor, t),
+    tintStrength: lerp(a.tintStrength, b.tintStrength, t),
+    particleCount: lerp(a.particleCount, b.particleCount, t),
+    trailFadeAlpha: lerp(a.trailFadeAlpha, b.trailFadeAlpha, t),
+  };
+}
+
+// Effective values for *this* frame, recomputed at the top of drawFrame()
+// from the active chapter's blend. Kept as module state (rather than
+// threaded through every function) since applyAmbient()/the cursor dot
+// also need to read them outside the main particle loop.
+let flowSpeed = DEFAULT_SNAPSHOT.flowSpeed;
+let flowBias = DEFAULT_SNAPSHOT.flowBias;
+let flowTurbulence = DEFAULT_SNAPSHOT.flowTurbulence;
+let cloudDarkenFactor = DEFAULT_SNAPSHOT.cloudDarkenFactor;
 
 function effectiveBackgroundRGB(hour: number): [number, number, number] {
   const [r, g, b] = interpolateKeyframes(BACKGROUND_KEYFRAMES, hour);
@@ -461,16 +474,21 @@ if (!prefersReducedMotion) {
   });
 }
 
-// Depth layers: each mode's particle budget is split across back/mid/front
+// Depth layers: each frame's particle budget is split across back/mid/front
 // so the flow field reads as layers of depth rather than one flat plane -
 // back is smaller/slower/faintest, front is bigger/faster/most opaque.
 type ParticleLayer = 'back' | 'mid' | 'front';
 const PARTICLE_LAYERS: ParticleLayer[] = ['back', 'mid', 'front'];
 
-const LAYER_CONFIG: Record<
-  ParticleLayer,
-  { countRatio: number; speedMul: number; turbulenceMul: number; sizeMul: number; alpha: number }
-> = {
+interface LayerConfig {
+  countRatio: number;
+  speedMul: number;
+  turbulenceMul: number;
+  sizeMul: number;
+  alpha: number;
+}
+
+const LAYER_CONFIG: Record<ParticleLayer, LayerConfig> = {
   back: { countRatio: 0.45, speedMul: 0.55, turbulenceMul: 0.6, sizeMul: 0.65, alpha: 0.35 },
   mid: { countRatio: 0.35, speedMul: 1, turbulenceMul: 1, sizeMul: 1, alpha: 0.7 },
   front: { countRatio: 0.2, speedMul: 1.7, turbulenceMul: 1.5, sizeMul: 1.45, alpha: 1 },
@@ -517,43 +535,49 @@ function sampleNoiseGrid(x: number, y: number): number {
   return lerp(lerp(v00, v10, tx), lerp(v01, v11, tx), ty);
 }
 
-// Sunny: sparse, small, bright motes drifting slowly upward with an
-// occasional brightness twinkle - not following the curl field at all.
-function updateSunnyParticle(p: Particle, time: number, layer: ParticleLayer) {
-  const cfg = LAYER_CONFIG[layer];
-  p.x += (Math.sin(time + p.seed * Math.PI * 2) * 0.4 + flowBias.x * 0.5) * cfg.speedMul;
-  p.y += (-0.5 - flowSpeed * 0.15) * cfg.speedMul;
-}
+// A particle's velocity is a weighted blend of all three modes' motion
+// formulas (weights sum to ~1) rather than picking one - this is what
+// makes a chapter transition actually morph the flow field's behavior
+// frame by frame, instead of cross-fading between two finished looks.
+function computeBlendedVelocity(
+  p: Particle,
+  time: number,
+  weights: [number, number, number],
+  cfg: LayerConfig,
+): { vx: number; vy: number } {
+  let vx = 0;
+  let vy = 0;
 
-// Cloudy: large, soft, high-density blobs drifting together slowly with
-// the ambient wind.
-function updateCloudyParticle(p: Particle, layer: ParticleLayer) {
-  const cfg = LAYER_CONFIG[layer];
-  const angle = sampleNoiseGrid(p.x, p.y);
-  let vx = Math.cos(angle) * 0.5 + flowBias.x;
-  let vy = Math.sin(angle) * 0.5 + flowBias.y;
-
-  if (flowTurbulence > 0) {
-    vx += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
-    vy += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
+  if (weights[0] > 0.001) {
+    vx += weights[0] * (Math.sin(time + p.seed * Math.PI * 2) * 0.4 + flowBias.x * 0.5) * cfg.speedMul;
+    vy += weights[0] * (-0.5 - flowSpeed * 0.15) * cfg.speedMul;
   }
 
-  const len = Math.hypot(vx, vy) || 1;
-  p.x += (vx / len) * flowSpeed * 0.6 * cfg.speedMul;
-  p.y += (vy / len) * flowSpeed * 0.6 * cfg.speedMul;
+  if (weights[1] > 0.001) {
+    const angle = sampleNoiseGrid(p.x, p.y);
+    let cvx = Math.cos(angle) * 0.5 + flowBias.x;
+    let cvy = Math.sin(angle) * 0.5 + flowBias.y;
+    if (flowTurbulence > 0) {
+      cvx += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
+      cvy += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
+    }
+    const len = Math.hypot(cvx, cvy) || 1;
+    vx += weights[1] * (cvx / len) * flowSpeed * 0.6 * cfg.speedMul;
+    vy += weights[1] * (cvy / len) * flowSpeed * 0.6 * cfg.speedMul;
+  }
+
+  if (weights[2] > 0.001) {
+    vx += weights[2] * (flowBias.x * 1.5 + (Math.random() - 0.5) * flowTurbulence * 2 * cfg.turbulenceMul);
+    vy += weights[2] * (6 + flowSpeed * 1.5) * cfg.speedMul;
+  }
+
+  return { vx, vy };
 }
 
-// Rainy: thin, fast-falling streaks slanted by wind, plus a subtle
-// vertical noise overlay across the whole screen.
-function updateRainParticle(p: Particle, layer: ParticleLayer) {
-  const cfg = LAYER_CONFIG[layer];
-  p.x += flowBias.x * 1.5 + (Math.random() - 0.5) * flowTurbulence * 2 * cfg.turbulenceMul;
-  p.y += (6 + flowSpeed * 1.5) * cfg.speedMul;
-}
-
-function drawRainNoiseOverlay() {
+function drawRainNoiseOverlay(alpha: number) {
   ctx.save();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
+  ctx.globalAlpha = alpha;
   ctx.lineWidth = 1;
   for (let i = 0; i < 40; i++) {
     const x = Math.random() * viewWidth;
@@ -569,8 +593,8 @@ function drawRainNoiseOverlay() {
 
 // Batching: every particle of a given depth layer is added as a subpath of
 // that layer's single Path2D, then filled/stroked exactly once - instead
-// of a beginPath/fill (or stroke) per particle, it's one draw call per
-// layer (at most 3) no matter how many particles are on screen.
+// of a beginPath/fill (or stroke) per particle, it's at most a couple of
+// draw calls per layer no matter how many particles are on screen.
 function addCircleToPath(path: Path2D, x: number, y: number, radius: number) {
   path.moveTo(x + radius, y);
   path.arc(x, y, radius, 0, Math.PI * 2);
@@ -583,7 +607,7 @@ function fillParticlePath(path: Path2D, color: [number, number, number], alpha: 
   ctx.globalAlpha = 1;
 }
 
-function strokeRainPath(path: Path2D, color: [number, number, number], alpha: number, lineWidth: number) {
+function strokeStreakPath(path: Path2D, color: [number, number, number], alpha: number, lineWidth: number) {
   ctx.strokeStyle = rgbString(color);
   ctx.globalAlpha = alpha;
   ctx.lineWidth = lineWidth;
@@ -592,76 +616,77 @@ function strokeRainPath(path: Path2D, color: [number, number, number], alpha: nu
 }
 
 function drawFrame(time: number) {
+  const prevChapter = chapters[Math.max(activeChapterIndex - 1, 0)];
+  const currentChapter = chapters[activeChapterIndex];
+  const prevSnapshot = prevChapter?.snapshot ?? DEFAULT_SNAPSHOT;
+  const currentSnapshot = currentChapter?.snapshot ?? DEFAULT_SNAPSHOT;
+  const blend = blendSnapshots(prevSnapshot, currentSnapshot, chapterProgress);
+  const weights = blend.modeWeights;
+
+  flowSpeed = blend.flowSpeed;
+  flowBias = blend.flowBias;
+  flowTurbulence = blend.flowTurbulence;
+  cloudDarkenFactor = blend.cloudDarkenFactor;
+  applyAmbient(Number(slider.value));
+  updateCursorColor(blend.tintColor);
+
   const [br, bg, bb] = backgroundRGB;
-  ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, ${TRAIL_FADE_ALPHA[currentWeatherMode]})`;
+  ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, ${blend.trailFadeAlpha})`;
   ctx.fillRect(0, 0, viewWidth, viewHeight);
 
-  if (currentWeatherMode === 'rainy') {
-    drawRainNoiseOverlay();
-  }
-  if (currentWeatherMode === 'cloudy') {
-    computeNoiseGrid(time * 0.5);
+  computeNoiseGrid(time * 0.5);
+  if (weights[2] > 0.02) {
+    drawRainNoiseOverlay(weights[2] * 0.08);
   }
 
-  const renderColor = resolveParticleColor(currentWeatherMode, particleColorRGB);
-  const count = Math.round(MODE_PARTICLE_COUNT[currentWeatherMode] * particleCountRatio);
+  const renderColor = mixColor(particleColorRGB, blend.tintColor, blend.tintStrength);
+  const count = Math.round(blend.particleCount * particleCountRatio);
 
-  const layerPaths: Record<ParticleLayer, Path2D> = {
-    back: new Path2D(),
-    mid: new Path2D(),
-    front: new Path2D(),
-  };
+  const dotPaths: Record<ParticleLayer, Path2D> = { back: new Path2D(), mid: new Path2D(), front: new Path2D() };
+  const streakPaths: Record<ParticleLayer, Path2D> = { back: new Path2D(), mid: new Path2D(), front: new Path2D() };
+  const hasStreaks: Record<ParticleLayer, boolean> = { back: false, mid: false, front: false };
 
   for (let i = 0; i < count; i++) {
     const p = particles[i];
     const layer = layerForIndex(i, count);
     const cfg = LAYER_CONFIG[layer];
-    const path = layerPaths[layer];
 
-    if (currentWeatherMode === 'sunny') {
-      updateSunnyParticle(p, time, layer);
-      applyCursorField(p);
-      applyRipple(p);
-      wrapParticle(p);
-      const twinkle = 0.5 + 0.5 * Math.sin(time * 4 + p.seed * 30);
-      addCircleToPath(path, p.x, p.y, (1 + twinkle * 0.8) * cfg.sizeMul);
-    } else if (currentWeatherMode === 'cloudy') {
-      updateCloudyParticle(p, layer);
-      applyCursorField(p);
-      applyRipple(p);
-      wrapParticle(p);
-      const radius = 5 + Math.sin(p.seed * 10 + time) * 1.5 + 3;
-      addCircleToPath(path, p.x, p.y, radius * cfg.sizeMul);
-    } else {
-      updateRainParticle(p, layer);
-      applyCursorField(p);
-      applyRipple(p);
-      wrapParticle(p);
-      const length = (8 + Math.abs(flowBias.x) * 4) * cfg.sizeMul;
-      const slantX = flowBias.x * 3;
-      path.moveTo(p.x, p.y);
-      path.lineTo(p.x - slantX, p.y - length);
+    const { vx, vy } = computeBlendedVelocity(p, time, weights, cfg);
+    p.x += vx;
+    p.y += vy;
+    applyCursorField(p);
+    applyRipple(p);
+    wrapParticle(p);
+
+    const twinkle = 0.5 + 0.5 * Math.sin(time * 4 + p.seed * 30);
+    const sunnyRadius = 1 + twinkle * 0.8;
+    const cloudyRadius = 5 + Math.sin(p.seed * 10 + time) * 1.5 + 3;
+    const rainRadius = 1.2;
+    const radius =
+      (weights[0] * sunnyRadius + weights[1] * cloudyRadius + weights[2] * rainRadius) * cfg.sizeMul;
+    addCircleToPath(dotPaths[layer], p.x, p.y, radius);
+
+    if (weights[2] > 0.02) {
+      const length = (8 + Math.abs(flowBias.x) * 4) * cfg.sizeMul * weights[2];
+      const slantX = flowBias.x * 3 * weights[2];
+      streakPaths[layer].moveTo(p.x, p.y);
+      streakPaths[layer].lineTo(p.x - slantX, p.y - length);
+      hasStreaks[layer] = true;
     }
   }
 
+  const dotAlphaBase = weights[0] * 0.85 + weights[1] * 0.55 + weights[2] * 0.75;
   for (const layer of PARTICLE_LAYERS) {
     const cfg = LAYER_CONFIG[layer];
-    if (currentWeatherMode === 'rainy') {
-      strokeRainPath(layerPaths[layer], renderColor, cfg.alpha, cfg.sizeMul);
-    } else {
-      fillParticlePath(layerPaths[layer], renderColor, cfg.alpha);
+    fillParticlePath(dotPaths[layer], renderColor, dotAlphaBase * cfg.alpha);
+    if (hasStreaks[layer]) {
+      strokeStreakPath(streakPaths[layer], renderColor, weights[2] * 0.9 * cfg.alpha, cfg.sizeMul);
     }
   }
 }
 
 function step() {
   drawFrame(performance.now() * 0.0005);
-  requestAnimationFrame(step);
-}
-
-if (prefersReducedMotion) {
-  drawFrame(0);
-} else {
   requestAnimationFrame(step);
 }
 
@@ -696,197 +721,189 @@ function renderLastUpdated() {
 
 setInterval(renderLastUpdated, 30000);
 
-const cityListEl = document.querySelector<HTMLUListElement>('#cityList')!;
-const citySearchInput = document.querySelector<HTMLInputElement>('#citySearchInput')!;
-const citySearchResults = document.querySelector<HTMLUListElement>('#citySearchResults')!;
-const citySearchHint = document.querySelector<HTMLParagraphElement>('#citySearchHint')!;
+// --- Chapters: one full-screen, pinned+scrubbed section per city ---
 
-const MAX_CITIES = 8;
-
-function getCityButtons(): HTMLButtonElement[] {
-  return Array.from(cityListEl.querySelectorAll<HTMLButtonElement>('.city-button'));
+interface ChapterCity {
+  name: string;
+  lat: number;
+  lon: number;
+  weather?: CityWeather;
+  snapshot: WeatherSnapshot;
+  sectionEl: HTMLElement;
+  navButtonEl: HTMLButtonElement;
+  conditionEl: HTMLElement;
+  tempValueEl: HTMLElement;
+  scrollTrigger?: ScrollTrigger;
 }
 
-function updateCitySelectionUI() {
-  getCityButtons().forEach((button) => {
-    button.setAttribute('aria-pressed', String(button.dataset.name === selectedCityName));
+// Scrolling to a chapter by its section's DOM position is unreliable once
+// ScrollTrigger has pinned things (spacers get inserted, elements go
+// position:fixed) - jumping to the trigger's own computed `start` plus a
+// pixel is the position ScrollTrigger itself considers "just inside this
+// chapter", so onEnter/onUpdate reliably fire instead of landing exactly
+// on a boundary neither chapter reports as active.
+function scrollToChapter(chapter: ChapterCity) {
+  const top = (chapter.scrollTrigger?.start ?? 0) + 1;
+  window.scrollTo({ top, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+}
+
+const chaptersContainer = document.querySelector<HTMLElement>('#chapters')!;
+const chapterNavList = document.querySelector<HTMLUListElement>('#chapterNavList')!;
+
+const MAX_CHAPTERS = 8;
+const chapters: ChapterCity[] = [];
+
+// Chapter 0 has no "previous" city to blend from, so drawFrame's
+// prevChapter/currentChapter both resolve to it - it renders fully
+// settled from the very first frame, matching the old page's behavior of
+// defaulting to the first city immediately on load.
+let activeChapterIndex = 0;
+let chapterProgress = 1;
+
+function updateChapterNavActive() {
+  chapters.forEach((chapter, idx) => {
+    chapter.navButtonEl.classList.toggle('is-active', idx === activeChapterIndex);
   });
 }
 
-function selectCity(name: string) {
-  selectedCityName = name;
-  applyWeatherToFlowField(cityWeatherByName.get(name));
-  applyAmbient(Number(slider.value));
-  updateCitySelectionUI();
-  cityLabel.textContent = `${name} 기준`;
+function updateChapterVisuals(index: number, progress: number) {
+  activeChapterIndex = index;
+  chapterProgress = progress;
+  updateChapterNavActive();
 
-  const weather = cityWeatherByName.get(name);
-  console.log(
-    `[city] ${name}: mode=${currentWeatherMode}, weathercode=${weather ? weather.weathercode : 'N/A'}`,
-  );
+  const chapter = chapters[index];
+  const targetTemp = chapter.weather?.temperature ?? 0;
+  chapter.tempValueEl.textContent = String(Math.round(lerp(0, targetTemp, progress)));
 
+  // The ambient rAF loop is disabled under reduced motion (see the bottom
+  // of this file), so nothing would otherwise repaint the canvas as the
+  // chapter's blend state changes - redraw once per scroll update instead.
   if (prefersReducedMotion) {
     drawFrame(0);
   }
 }
 
-function updateSearchAvailability() {
-  const count = getCityButtons().length;
-  const atMax = count >= MAX_CITIES;
-  citySearchInput.disabled = atMax;
-  citySearchInput.placeholder = atMax ? '최대 8개까지 추가했어요' : '도시 검색 후 추가';
-  citySearchHint.textContent = `${count} / ${MAX_CITIES}개 도시`;
+function createChapter(name: string, lat: number, lon: number): ChapterCity {
+  const index = chapters.length;
+
+  const sectionEl = document.createElement('section');
+  sectionEl.className = 'chapter';
+
+  const inner = document.createElement('div');
+  inner.className = 'chapter-inner';
+
+  const conditionEl = document.createElement('p');
+  conditionEl.className = 'chapter-condition';
+  conditionEl.textContent = 'Loading…';
+
+  const cityNameEl = document.createElement('h2');
+  cityNameEl.className = 'chapter-city';
+  cityNameEl.textContent = name;
+
+  const tempEl = document.createElement('p');
+  tempEl.className = 'chapter-temp';
+  const tempValueEl = document.createElement('span');
+  tempValueEl.className = 'chapter-temp-value';
+  tempValueEl.textContent = '0';
+  tempEl.append(tempValueEl, document.createTextNode('°'));
+
+  inner.append(conditionEl, cityNameEl, tempEl);
+  sectionEl.appendChild(inner);
+  chaptersContainer.appendChild(sectionEl);
+
+  const navButtonEl = document.createElement('button');
+  navButtonEl.type = 'button';
+  navButtonEl.className = 'chapter-nav-button';
+  navButtonEl.textContent = name;
+  const navItem = document.createElement('li');
+  navItem.appendChild(navButtonEl);
+  chapterNavList.appendChild(navItem);
+
+  const chapter: ChapterCity = {
+    name,
+    lat,
+    lon,
+    snapshot: DEFAULT_SNAPSHOT,
+    sectionEl,
+    navButtonEl,
+    conditionEl,
+    tempValueEl,
+  };
+  chapters.push(chapter);
+  updateChapterNavActive();
+
+  navButtonEl.addEventListener('click', () => scrollToChapter(chapter));
+
+  const timeline = gsap.timeline({
+    scrollTrigger: {
+      trigger: sectionEl,
+      start: 'top top',
+      end: '+=100%',
+      pin: true,
+      scrub: true,
+      onEnter: () => updateChapterVisuals(index, 0),
+      onEnterBack: () => updateChapterVisuals(index, 1),
+      onUpdate: (self) => {
+        if (!self.isActive) return;
+        updateChapterVisuals(index, self.progress);
+      },
+    },
+  });
+  chapter.scrollTrigger = timeline.scrollTrigger ?? undefined;
+
+  return chapter;
 }
 
-function createCityListItem(name: string, lat: number, lon: number, removable: boolean): HTMLLIElement {
-  const li = document.createElement('li');
-  li.className = 'city-item';
-
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'city-button';
-  button.dataset.name = name;
-  button.dataset.lat = String(lat);
-  button.dataset.lon = String(lon);
-  button.setAttribute('aria-pressed', 'false');
-  button.innerHTML = `
-    <span class="weather-icon" aria-hidden="true"></span>
-    <span class="city"></span><span class="temp">--</span><span class="weather">Loading…</span>
-    <span class="wind">
-      <svg class="wind-arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 L11.5 9 L8 7 L4.5 9 Z" fill="currentColor" /></svg>
-      <span class="wind-value"></span>
-    </span>
-    <span class="precip" hidden>
-      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2C8 2 3.5 8 3.5 11a4.5 4.5 0 0 0 9 0C12.5 8 8 2 8 2Z" fill="currentColor" /></svg>
-      <span class="precip-value"></span>
-    </span>
-  `;
-  // Set via textContent, not innerHTML, since `name` comes from the
-  // geocoding API and must not be parsed as markup.
-  button.querySelector('.city')!.textContent = name;
-  li.appendChild(button);
-
-  if (removable) {
-    const removeButton = document.createElement('button');
-    removeButton.type = 'button';
-    removeButton.className = 'city-remove';
-    removeButton.dataset.name = name;
-    removeButton.setAttribute('aria-label', `${name} 삭제`);
-    removeButton.textContent = '×';
-    li.appendChild(removeButton);
-  }
-
-  return li;
-}
-
-function removeCity(name: string, li: HTMLLIElement) {
-  li.remove();
-  cityWeatherByName.delete(name);
-  if (selectedCityName === name) {
-    const fallback = getCityButtons()[0]?.dataset.name;
-    if (fallback) selectCity(fallback);
-  }
-  updateSearchAvailability();
-}
-
-cityListEl.addEventListener('click', (event) => {
-  const target = event.target as HTMLElement;
-
-  const removeButton = target.closest<HTMLButtonElement>('.city-remove');
-  if (removeButton) {
-    const li = removeButton.closest('li');
-    const name = removeButton.dataset.name;
-    if (li && name) removeCity(name, li);
-    return;
-  }
-
-  const cityButton = target.closest<HTMLButtonElement>('.city-button');
-  if (cityButton) {
-    const name = cityButton.dataset.name;
-    if (name && cityWeatherByName.has(name)) {
-      selectCity(name);
-    }
-  }
-});
-
-async function fetchAndRenderCityWeather(button: HTMLButtonElement) {
-  const iconEl = button.querySelector<HTMLSpanElement>('.weather-icon')!;
-  const tempEl = button.querySelector<HTMLSpanElement>('.temp')!;
-  const weatherEl = button.querySelector<HTMLSpanElement>('.weather')!;
-  const windEl = button.querySelector<HTMLSpanElement>('.wind')!;
-  const windArrowEl = button.querySelector<SVGElement>('.wind-arrow')!;
-  const windValueEl = button.querySelector<HTMLSpanElement>('.wind-value')!;
-  const precipEl = button.querySelector<HTMLSpanElement>('.precip')!;
-  const precipValueEl = button.querySelector<HTMLSpanElement>('.precip-value')!;
-  const name = button.dataset.name!;
+async function updateCityWeatherFor(chapter: ChapterCity) {
   try {
-    const { lat, lon } = button.dataset;
     const res = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,windspeed_10m,winddirection_10m,precipitation,cloudcover,weathercode`,
+      `https://api.open-meteo.com/v1/forecast?latitude=${chapter.lat}&longitude=${chapter.lon}&current=temperature_2m,windspeed_10m,winddirection_10m,precipitation,cloudcover,weathercode`,
     );
     if (!res.ok) throw new Error('Request failed');
     const data = await res.json();
     const current = data.current;
-    cityWeatherByName.set(name, {
-      name,
+    const weather: CityWeather = {
+      name: chapter.name,
       temperature: current.temperature_2m,
       windspeed: current.windspeed_10m,
       winddirection: current.winddirection_10m,
       precipitation: current.precipitation,
       cloudcover: current.cloudcover,
       weathercode: current.weathercode,
-    });
-    tempEl.textContent = `${Math.round(current.temperature_2m)}°C`;
-    weatherEl.textContent = weatherLabelFromCode(current.weathercode);
-    iconEl.innerHTML = weatherModeIcon(weatherModeFromCode(current.weathercode));
-
-    // Point the arrow the same way the wind actually pushes the flow
-    // field (see applyWeatherToFlowField's flowBearing), not the raw
-    // meteorological "from" direction, so the icon and the hero
-    // animation agree with each other.
-    const flowBearing = (current.winddirection_10m + 180) % 360;
-    windArrowEl.style.transform = `rotate(${flowBearing}deg)`;
-    windValueEl.textContent = `${Math.round(current.windspeed_10m)}km/h`;
-
-    if (current.precipitation > 0.05) {
-      precipEl.hidden = false;
-      const roundedPrecip = Math.round(current.precipitation * 10) / 10;
-      precipValueEl.textContent = `${roundedPrecip}mm`;
-    } else {
-      precipEl.hidden = true;
-    }
-
-    console.log(`[weather] ${name}:`, {
-      temperature: current.temperature_2m,
-      windspeed: current.windspeed_10m,
-      weathercode: current.weathercode,
-    });
+    };
+    chapter.weather = weather;
+    chapter.snapshot = computeSnapshot(weather);
+    chapter.conditionEl.textContent = weatherLabelFromCode(current.weathercode);
 
     lastFetchTime = new Date();
     renderLastUpdated();
   } catch {
-    tempEl.textContent = '--';
-    weatherEl.textContent = 'Unavailable';
-    windEl.hidden = true;
-    precipEl.hidden = true;
+    chapter.conditionEl.textContent = 'Unavailable';
   }
 }
 
-async function loadCityWeather() {
-  await Promise.all(getCityButtons().map(fetchAndRenderCityWeather));
-
-  const defaultCity = getCityButtons()[0]?.dataset.name;
-  const firstAvailable = defaultCity && cityWeatherByName.has(defaultCity) ? defaultCity : [...cityWeatherByName.keys()][0];
-  if (firstAvailable) {
-    selectCity(firstAvailable);
-  }
-
+async function loadAllChapterWeather() {
+  await Promise.all(chapters.map(updateCityWeatherFor));
   updateSearchAvailability();
 }
 
-loadCityWeather();
+const DEFAULT_CITIES: Array<{ name: string; lat: number; lon: number }> = [
+  { name: 'Seoul', lat: 37.5665, lon: 126.978 },
+  { name: 'London', lat: 51.5074, lon: -0.1278 },
+  { name: 'Bangkok', lat: 13.7563, lon: 100.5018 },
+  { name: 'Vancouver', lat: 49.2827, lon: -123.1207 },
+];
+
+DEFAULT_CITIES.forEach(({ name, lat, lon }) => createChapter(name, lat, lon));
+loadAllChapterWeather();
 
 // --- City search (Open-Meteo Geocoding API) ---
+// Selecting a result adds a brand new pinned chapter (see createChapter)
+// rather than a card in a list - the whole "Right now" list is gone.
+
+const citySearchInput = document.querySelector<HTMLInputElement>('#citySearchInput')!;
+const citySearchResults = document.querySelector<HTMLUListElement>('#citySearchResults')!;
+const citySearchHint = document.querySelector<HTMLParagraphElement>('#citySearchHint')!;
 
 interface GeocodingResult {
   id: number;
@@ -900,33 +917,42 @@ interface GeocodingResult {
 let searchDebounceTimer: number | undefined;
 let searchAbortController: AbortController | null = null;
 
+function updateSearchAvailability() {
+  const count = chapters.length;
+  const atMax = count >= MAX_CHAPTERS;
+  citySearchInput.disabled = atMax;
+  citySearchInput.placeholder = atMax ? '최대 8개 챕터까지 추가했어요' : '도시 검색 후 챕터 추가';
+  citySearchHint.textContent = `${count} / ${MAX_CHAPTERS}개 도시 챕터`;
+}
+
 function closeSearchResults() {
   citySearchResults.hidden = true;
   citySearchResults.innerHTML = '';
   citySearchInput.setAttribute('aria-expanded', 'false');
 }
 
-function addCity(result: GeocodingResult) {
+function addCityChapter(result: GeocodingResult) {
   citySearchInput.value = '';
   closeSearchResults();
 
-  const existing = getCityButtons().find((button) => button.dataset.name === result.name);
+  const existing = chapters.find((chapter) => chapter.name === result.name);
   if (existing) {
-    selectCity(result.name);
+    scrollToChapter(existing);
     return;
   }
 
-  if (getCityButtons().length >= MAX_CITIES) {
+  if (chapters.length >= MAX_CHAPTERS) {
     updateSearchAvailability();
     return;
   }
 
-  const li = createCityListItem(result.name, result.latitude, result.longitude, true);
-  cityListEl.appendChild(li);
+  const chapter = createChapter(result.name, result.latitude, result.longitude);
+  ScrollTrigger.refresh();
   updateSearchAvailability();
 
-  const button = li.querySelector<HTMLButtonElement>('.city-button')!;
-  fetchAndRenderCityWeather(button).then(() => selectCity(result.name));
+  updateCityWeatherFor(chapter).then(() => {
+    scrollToChapter(chapter);
+  });
 }
 
 function renderSearchResults(results: GeocodingResult[]) {
@@ -957,7 +983,7 @@ function renderSearchResults(results: GeocodingResult[]) {
       button.appendChild(metaEl);
     }
 
-    button.addEventListener('click', () => addCity(result));
+    button.addEventListener('click', () => addCityChapter(result));
     li.appendChild(button);
     citySearchResults.appendChild(li);
   });
@@ -1009,22 +1035,17 @@ document.addEventListener('click', (event) => {
 
 // --- Custom cursor ---
 // A small dot that eases toward the pointer and picks up the current
-// weather mode's tint. `updateCursorColor` is called from
-// applyWeatherToFlowField above; being a hoisted function declaration,
-// it's safe to reference there even though it's defined below - by the
-// time weather data actually arrives and calls it, the whole module
-// (including this block) has already finished its initial synchronous run.
+// blended weather tint (see drawFrame's call to updateCursorColor).
 const cursorDot = document.querySelector<HTMLDivElement>('#cursorDot')!;
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
 
-function updateCursorColor() {
-  cursorDot.style.backgroundColor = rgbString(MODE_TINT[currentWeatherMode].color);
+function updateCursorColor(tintColor: [number, number, number]) {
+  cursorDot.style.backgroundColor = rgbString(tintColor);
 }
 
 if (!isTouchDevice) {
   cursorDot.hidden = false;
   document.body.classList.add('has-custom-cursor');
-  updateCursorColor();
 
   const CURSOR_EASE = 0.2;
   const CURSOR_HOVER_SCALE = 2;
@@ -1067,4 +1088,13 @@ if (!isTouchDevice) {
   if (!prefersReducedMotion) {
     requestAnimationFrame(stepCursor);
   }
+}
+
+// Kicked off last, now that chapters/weather/cursor setup above have all
+// run at least once synchronously - drawFrame() reads chapters[...] and
+// module state defined throughout this file.
+if (prefersReducedMotion) {
+  drawFrame(0);
+} else {
+  requestAnimationFrame(step);
 }
