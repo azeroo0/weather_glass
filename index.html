@@ -4,7 +4,20 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>weather_glass</title>
+    <title>weather_glass — a living map of today's weather</title>
+    <meta
+      name="description"
+      content="weather_glass turns each city's real-time weather into an animated flow field - scroll through Seoul, London, Bangkok, Vancouver, and any city you add."
+    />
+
+    <meta property="og:title" content="weather_glass — a living map of today's weather" />
+    <meta
+      property="og:description"
+      content="Each city's real-time weather, drawn as a living flow field you can scroll through."
+    />
+    <!-- TODO: swap for an actual screenshot of the hero/flow-field once one exists -->
+    <meta property="og:image" content="/og-placeholder.svg" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -103,6 +116,21 @@
             </p>
           </div>
         </section>
+      </section>
+
+      <section class="stack fade-up">
+        <span class="stack-label">Built with</span>
+        <ul class="stack-list">
+          <li>TypeScript</li>
+          <li>Vite</li>
+          <li>GSAP</li>
+          <li>Open-Meteo API</li>
+        </ul>
+      </section>
+
+      <section class="outro fade-up">
+        <p class="outro-credit">Built by <span class="outro-name">Ayoung Yoon</span></p>
+        <a href="mailto:emily021209@gmail.com" class="outro-link">emily021209@gmail.com</a>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

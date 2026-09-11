@@ -63,6 +63,37 @@ p {
 }
 
 /*
+  Shared focus ring for every interactive element on the site: a soft
+  translucent glow rather than a hard-edged rectangle. color-mix() keeps
+  it tinted to whatever currentColor already is (so it flips with
+  body.is-light automatically); browsers without color-mix() fall back to
+  a plain solid outline instead of losing the indicator entirely.
+*/
+a:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+@supports (color: color-mix(in srgb, red 10%, transparent)) {
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 32%, transparent);
+  }
+}
+
+/*
+  Note: most interactive elements below reset with `all: unset`, which
+  also resets `transition` - a plain shared `button { transition: ... }`
+  rule would get overridden by their own (more specific) `all: unset`, so
+  each element declares its own transition directly instead of relying on
+  one shared rule here.
+*/
+
+/*
   Split into two panels (rather than one full-height slab) so the reveal
   in main.ts can slide the top half up and the bottom half down at the
   same time - a curtain opening, not a single-direction wipe. Panel
@@ -186,6 +217,7 @@ body.has-custom-cursor * {
   letter-spacing: 0.02em;
   opacity: 0.55;
   cursor: pointer;
+  border-radius: 4px;
   transition: opacity 0.2s ease;
 }
 
@@ -198,11 +230,6 @@ body.has-custom-cursor * {
   opacity: 1;
   text-decoration: underline;
   text-underline-offset: 4px;
-}
-
-.chapter-nav-button:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 4px;
 }
 
 main {
@@ -415,11 +442,13 @@ body.is-light .chapter-transition-word {
   font-size: 0.9rem;
   white-space: nowrap;
   cursor: pointer;
+  opacity: 0.85;
+  border-radius: 4px;
+  transition: opacity 0.2s ease;
 }
 
-.play-button:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 4px;
+.play-button:hover {
+  opacity: 1;
 }
 
 input[type='range'] {
@@ -430,6 +459,7 @@ input[type='range'] {
   background: transparent;
   color: inherit;
   cursor: pointer;
+  border-radius: 4px;
 }
 
 input[type='range']::-webkit-slider-runnable-track {
@@ -470,11 +500,6 @@ input[type='range']::-moz-range-thumb:hover {
   transform: scale(1.2);
 }
 
-input[type='range']:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 6px;
-}
-
 .city-search-section {
   display: flex;
   flex-direction: column;
@@ -494,7 +519,13 @@ input[type='range']:focus-visible {
   color: inherit;
   padding: 0.5rem 0;
   border-bottom: 1px solid currentColor;
+  border-radius: 4px;
   opacity: 0.9;
+  transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.city-search-input:hover:not(:disabled) {
+  opacity: 1;
 }
 
 .city-search-input::placeholder {
@@ -505,11 +536,6 @@ input[type='range']:focus-visible {
 .city-search-input:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-.city-search-input:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 4px;
 }
 
 .city-search-results {
@@ -539,6 +565,7 @@ input[type='range']:focus-visible {
   font: inherit;
   color: inherit;
   cursor: pointer;
+  transition: background-color 0.2s ease;
 }
 
 .city-search-result:hover,
@@ -621,6 +648,70 @@ input[type='range']:focus-visible {
     gap: 4rem;
     align-items: start;
   }
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  text-align: center;
+}
+
+.stack-label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+}
+
+.stack-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+}
+
+.stack-list li {
+  padding: 0.35rem 0.9rem;
+  font-size: 0.8rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.75;
+}
+
+/* The site's final, quiet note - centered and generously spaced so it
+   reads as a closing beat rather than another content section. */
+.outro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: clamp(2rem, 6vw, 3.5rem) 0 clamp(3rem, 8vw, 5rem);
+  text-align: center;
+}
+
+.outro-credit {
+  font-size: 0.95rem;
+  opacity: 0.75;
+}
+
+.outro-name {
+  font-family: 'Fraunces', serif;
+}
+
+.outro-link {
+  color: inherit;
+  font-size: 0.85rem;
+  opacity: 0.6;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  border-radius: 4px;
+  transition: opacity 0.2s ease;
+}
+
+.outro-link:hover {
+  opacity: 0.9;
 }
 
 @media (max-width: 480px) {
