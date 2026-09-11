@@ -734,6 +734,10 @@ interface ChapterCity {
   conditionEl: HTMLElement;
   tempValueEl: HTMLElement;
   scrollTrigger?: ScrollTrigger;
+  // Only the very first onEnter should count up from 0 - every later
+  // entry (onEnter again after leaving, or onEnterBack) just shows the
+  // resolved value immediately.
+  hasPlayedTempCountUp?: boolean;
 }
 
 // Scrolling to a chapter by its section's DOM position is unreliable once
@@ -766,14 +770,14 @@ function updateChapterNavActive() {
   });
 }
 
+// Drives only the background blend (see drawFrame's use of
+// activeChapterIndex/chapterProgress) - this runs continuously from
+// ScrollTrigger's scrub onUpdate, so it must stay free of anything that
+// should settle once and stop reacting to scroll (like the temp readout).
 function updateChapterVisuals(index: number, progress: number) {
   activeChapterIndex = index;
   chapterProgress = progress;
   updateChapterNavActive();
-
-  const chapter = chapters[index];
-  const targetTemp = chapter.weather?.temperature ?? 0;
-  chapter.tempValueEl.textContent = String(Math.round(lerp(0, targetTemp, progress)));
 
   // The ambient rAF loop is disabled under reduced motion (see the bottom
   // of this file), so nothing would otherwise repaint the canvas as the
@@ -781,6 +785,39 @@ function updateChapterVisuals(index: number, progress: number) {
   if (prefersReducedMotion) {
     drawFrame(0);
   }
+}
+
+function showChapterTemp(chapter: ChapterCity) {
+  const targetTemp = chapter.weather?.temperature ?? 0;
+  chapter.tempValueEl.textContent = String(Math.round(targetTemp));
+}
+
+// A plain (non-scrub) tween: runs once on the first real onEnter and is
+// then done, independent of however much the user scrubs back and forth
+// afterward. Every later entry - onEnter again after leaving, or
+// onEnterBack - skips straight to showChapterTemp() instead.
+function playChapterTempCountUp(chapter: ChapterCity) {
+  if (chapter.hasPlayedTempCountUp) {
+    showChapterTemp(chapter);
+    return;
+  }
+  chapter.hasPlayedTempCountUp = true;
+
+  const targetTemp = chapter.weather?.temperature ?? 0;
+  if (prefersReducedMotion) {
+    showChapterTemp(chapter);
+    return;
+  }
+
+  const counter = { value: 0 };
+  gsap.to(counter, {
+    value: targetTemp,
+    duration: 1.2,
+    ease: 'power1.out',
+    onUpdate: () => {
+      chapter.tempValueEl.textContent = String(Math.round(counter.value));
+    },
+  });
 }
 
 function createChapter(name: string, lat: number, lon: number): ChapterCity {
@@ -841,8 +878,14 @@ function createChapter(name: string, lat: number, lon: number): ChapterCity {
       end: '+=100%',
       pin: true,
       scrub: true,
-      onEnter: () => updateChapterVisuals(index, 0),
-      onEnterBack: () => updateChapterVisuals(index, 1),
+      onEnter: () => {
+        updateChapterVisuals(index, 0);
+        playChapterTempCountUp(chapter);
+      },
+      onEnterBack: () => {
+        updateChapterVisuals(index, 1);
+        showChapterTemp(chapter);
+      },
       onUpdate: (self) => {
         if (!self.isActive) return;
         updateChapterVisuals(index, self.progress);
