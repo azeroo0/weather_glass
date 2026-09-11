@@ -881,8 +881,79 @@ function playChapterTempCountUp(chapter: ChapterCity) {
   });
 }
 
+const TRANSITION_MARQUEE_REPEATS = 16;
+const TRANSITION_MARQUEE_MAX_SHIFT = 30; // percent of the track's own width
+
+// A short pinned+scrubbed "beat" inserted right before the given city's
+// chapter (never before the very first one). The scrim's opacity and the
+// marquee track's x-position are both read straight from the
+// ScrollTrigger's own progress, so scrolling faster visibly moves the
+// marquee faster - there's no independent CSS animation running underneath.
+//
+// Appends bandEl to chaptersContainer itself (rather than letting the
+// caller do it) because ScrollTrigger's pin:true needs the element
+// already attached to the DOM when it's created - it inserts a spacer as
+// a sibling, which fails on a still-detached node.
+function createTransitionBand(nextCityName: string): HTMLElement {
+  const bandEl = document.createElement('section');
+  bandEl.className = 'chapter-transition';
+
+  const scrimEl = document.createElement('div');
+  scrimEl.className = 'chapter-transition-scrim';
+
+  const marqueeEl = document.createElement('div');
+  marqueeEl.className = 'chapter-transition-marquee';
+  const trackEl = document.createElement('div');
+  trackEl.className = 'chapter-transition-track';
+  for (let i = 0; i < TRANSITION_MARQUEE_REPEATS; i++) {
+    const wordEl = document.createElement('span');
+    wordEl.className = 'chapter-transition-word';
+    wordEl.textContent = nextCityName.toUpperCase();
+    trackEl.appendChild(wordEl);
+  }
+  marqueeEl.appendChild(trackEl);
+  bandEl.append(scrimEl, marqueeEl);
+  chaptersContainer.appendChild(bandEl);
+
+  if (!prefersReducedMotion) {
+    gsap.timeline({
+      scrollTrigger: {
+        trigger: bandEl,
+        start: 'top top',
+        end: '+=60%',
+        pin: true,
+        scrub: true,
+        onUpdate: (self) => {
+          if (!self.isActive) return;
+          gsap.set(trackEl, { xPercent: -TRANSITION_MARQUEE_MAX_SHIFT * self.progress });
+          // Peaks mid-band and eases back out at both ends, so the
+          // darkening reads as one breath in and out rather than a hard cut.
+          scrimEl.style.opacity = String(Math.sin(self.progress * Math.PI) * 0.35);
+        },
+        // onUpdate stops firing once isActive goes false, which can leave
+        // the scrim at whatever value the last *sampled* progress was
+        // rather than a clean 0 - force it back to fully transparent on
+        // the way out in either scroll direction so no darkness lingers
+        // into the chapter on either side of the band.
+        onLeave: () => {
+          scrimEl.style.opacity = '0';
+        },
+        onLeaveBack: () => {
+          scrimEl.style.opacity = '0';
+        },
+      },
+    });
+  }
+
+  return bandEl;
+}
+
 function createChapter(name: string, lat: number, lon: number): ChapterCity {
   const index = chapters.length;
+
+  if (index > 0) {
+    createTransitionBand(name);
+  }
 
   const sectionEl = document.createElement('section');
   sectionEl.className = 'chapter';
@@ -986,9 +1057,72 @@ async function updateCityWeatherFor(chapter: ChapterCity) {
   }
 }
 
+// --- Intro loader ---
+// Blocks the page (see body.is-loading) until the initial batch of
+// chapter weather fetches actually resolves. The percent shown is driven
+// by how many of those requests have genuinely settled - never a fake
+// timer - so slow network keeps the loader up exactly as long as the real
+// wait, and a fast one dismisses it just as quickly.
+const introLoaderEl = document.querySelector<HTMLElement>('#introLoader')!;
+const introLoaderPercentEl = document.querySelector<HTMLElement>('#introLoaderPercent')!;
+const introLoaderPanels = document.querySelectorAll<HTMLElement>('.intro-loader-panel');
+introLoaderPanels.forEach((panel) => {
+  panel.style.backgroundColor = document.body.style.backgroundColor;
+});
+
+const introLoaderCounter = { value: 0 };
+
+function setIntroLoaderPercent(percent: number) {
+  const target = Math.round(clamp(percent, 0, 100));
+  if (prefersReducedMotion) {
+    introLoaderCounter.value = target;
+    introLoaderPercentEl.textContent = `${target}%`;
+    return;
+  }
+  // Smooths the *display* between real progress steps (e.g. 0 -> 25 -> 50
+  // as each fetch settles) - the target itself is always the real ratio,
+  // this just avoids the number visibly snapping between jumps.
+  gsap.to(introLoaderCounter, {
+    value: target,
+    duration: 0.4,
+    ease: 'power1.out',
+    onUpdate: () => {
+      introLoaderPercentEl.textContent = `${Math.round(introLoaderCounter.value)}%`;
+    },
+  });
+}
+
+function hideIntroLoader() {
+  document.body.classList.remove('is-loading');
+
+  if (prefersReducedMotion) {
+    introLoaderEl.style.display = 'none';
+    return;
+  }
+
+  gsap.to('.intro-loader-panel--top', { yPercent: -100, duration: 0.8, ease: 'power3.inOut' });
+  gsap.to('.intro-loader-panel--bottom', { yPercent: 100, duration: 0.8, ease: 'power3.inOut' });
+  gsap.to('.intro-loader-content', { opacity: 0, duration: 0.4, ease: 'power1.out' });
+  gsap.delayedCall(0.85, () => {
+    introLoaderEl.style.display = 'none';
+  });
+}
+
 async function loadAllChapterWeather() {
-  await Promise.all(chapters.map(updateCityWeatherFor));
+  const total = chapters.length;
+  let completed = 0;
+  setIntroLoaderPercent(0);
+
+  await Promise.all(
+    chapters.map(async (chapter) => {
+      await updateCityWeatherFor(chapter);
+      completed += 1;
+      setIntroLoaderPercent((completed / total) * 100);
+    }),
+  );
+
   updateSearchAvailability();
+  hideIntroLoader();
 }
 
 const DEFAULT_CITIES: Array<{ name: string; lat: number; lon: number }> = [
@@ -999,6 +1133,7 @@ const DEFAULT_CITIES: Array<{ name: string; lat: number; lon: number }> = [
 ];
 
 DEFAULT_CITIES.forEach(({ name, lat, lon }) => createChapter(name, lat, lon));
+ScrollTrigger.refresh();
 
 // --- Hero teaser card: previews chapters[0] (the first city) ---
 

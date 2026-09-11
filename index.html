@@ -12,9 +12,18 @@
       rel="stylesheet"
     />
   </head>
-  <body>
+  <body class="is-loading">
     <canvas id="flowCanvas"></canvas>
     <div id="cursorDot" class="cursor-dot" aria-hidden="true" hidden></div>
+
+    <div id="introLoader" class="intro-loader">
+      <div class="intro-loader-panel intro-loader-panel--top"></div>
+      <div class="intro-loader-panel intro-loader-panel--bottom"></div>
+      <div class="intro-loader-content">
+        <span id="introLoaderPercent" class="intro-loader-percent" aria-live="polite">0%</span>
+        <span class="intro-loader-label">하늘을 불러오는 중...</span>
+      </div>
+    </div>
 
     <nav class="site-nav">
       <span class="logo">weather_glass</span>
