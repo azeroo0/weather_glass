@@ -33,12 +33,19 @@ interface Particle {
   x: number;
   y: number;
   seed: number;
+  // Transient outward "ripple" velocity from a click/tap, added on top of
+  // whatever the flow field says this frame. Decays to 0 each frame so the
+  // particle settles back into its normal flow-field motion on its own.
+  rvx: number;
+  rvy: number;
 }
 
 const particles: Particle[] = Array.from({ length: PARTICLE_COUNT }, () => ({
   x: Math.random() * canvas.width,
   y: Math.random() * canvas.height,
   seed: Math.random(),
+  rvx: 0,
+  rvy: 0,
 }));
 
 type ColorKeyframe = {
@@ -357,6 +364,47 @@ function wrapParticle(p: Particle) {
   if (p.y > canvas.height) p.y = 0;
 }
 
+// Click/tap ripple: nearby particles get a momentary outward kick, then
+// decay back to whatever the flow field is already telling them to do.
+// Disabled entirely under prefers-reduced-motion.
+const RIPPLE_RADIUS_RATIO = 0.175; // 15-20% of the smaller viewport dimension
+const RIPPLE_MAX_IMPULSE = 14;
+const RIPPLE_DECAY = 0.93;
+
+function triggerRipple(originX: number, originY: number) {
+  const radius = Math.min(canvas.width, canvas.height) * RIPPLE_RADIUS_RATIO;
+  for (const p of particles) {
+    const dx = p.x - originX;
+    const dy = p.y - originY;
+    const dist = Math.hypot(dx, dy);
+    if (dist >= radius) continue;
+    const falloff = 1 - dist / radius;
+    const nx = dist > 0.0001 ? dx / dist : Math.random() * 2 - 1;
+    const ny = dist > 0.0001 ? dy / dist : Math.random() * 2 - 1;
+    p.rvx += nx * falloff * RIPPLE_MAX_IMPULSE;
+    p.rvy += ny * falloff * RIPPLE_MAX_IMPULSE;
+  }
+}
+
+function applyRipple(p: Particle) {
+  if (p.rvx === 0 && p.rvy === 0) return;
+  p.x += p.rvx;
+  p.y += p.rvy;
+  p.rvx *= RIPPLE_DECAY;
+  p.rvy *= RIPPLE_DECAY;
+  if (Math.abs(p.rvx) < 0.02) p.rvx = 0;
+  if (Math.abs(p.rvy) < 0.02) p.rvy = 0;
+}
+
+if (!prefersReducedMotion) {
+  canvas.addEventListener('pointerdown', (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+    triggerRipple(x, y);
+  });
+}
+
 // Sunny: sparse, small, bright motes drifting slowly upward with an
 // occasional brightness twinkle - not following the curl field at all.
 function updateSunnyParticle(p: Particle, time: number) {
@@ -453,14 +501,17 @@ function drawFrame(time: number) {
 
     if (currentWeatherMode === 'sunny') {
       updateSunnyParticle(p, time);
+      applyRipple(p);
       wrapParticle(p);
       drawSunnyParticle(p, renderColor, time);
     } else if (currentWeatherMode === 'cloudy') {
       updateCloudyParticle(p, time);
+      applyRipple(p);
       wrapParticle(p);
       drawCloudyParticle(p, renderColor, time);
     } else {
       updateRainParticle(p);
+      applyRipple(p);
       wrapParticle(p);
       drawRainParticle(p, renderColor);
     }
