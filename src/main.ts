@@ -13,9 +13,31 @@ const lastUpdatedEl = document.querySelector<HTMLParagraphElement>('#lastUpdated
 const playButton = document.querySelector<HTMLButtonElement>('#playButton')!;
 const ctx = canvas.getContext('2d')!;
 
+const MAX_DEVICE_PIXEL_RATIO = 2;
+const MOBILE_VIEWPORT_MAX_WIDTH = 480; // matches the site's existing mobile breakpoint
+const MOBILE_PARTICLE_RATIO = 0.6;
+
+// All particle/flow-field math below works in CSS-pixel space
+// (0..viewWidth, 0..viewHeight). The canvas's backing store can be denser
+// (up to MAX_DEVICE_PIXEL_RATIO) for crispness on high-DPI screens, but is
+// capped so a 3x phone doesn't silently push 2.25x more pixels through
+// every fill/stroke than a capped-at-2x display would.
+let viewWidth = window.innerWidth;
+let viewHeight = window.innerHeight;
+let particleCountRatio = 1;
+
 function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  viewWidth = window.innerWidth;
+  viewHeight = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO);
+
+  canvas.width = viewWidth * dpr;
+  canvas.height = viewHeight * dpr;
+  canvas.style.width = `${viewWidth}px`;
+  canvas.style.height = `${viewHeight}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  particleCountRatio = viewWidth <= MOBILE_VIEWPORT_MAX_WIDTH ? MOBILE_PARTICLE_RATIO : 1;
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
@@ -41,8 +63,8 @@ interface Particle {
 }
 
 const particles: Particle[] = Array.from({ length: PARTICLE_COUNT }, () => ({
-  x: Math.random() * canvas.width,
-  y: Math.random() * canvas.height,
+  x: Math.random() * viewWidth,
+  y: Math.random() * viewHeight,
   seed: Math.random(),
   rvx: 0,
   rvy: 0,
@@ -360,10 +382,10 @@ function fieldAngle(x: number, y: number, time: number): number {
 }
 
 function wrapParticle(p: Particle) {
-  if (p.x < 0) p.x = canvas.width;
-  if (p.x > canvas.width) p.x = 0;
-  if (p.y < 0) p.y = canvas.height;
-  if (p.y > canvas.height) p.y = 0;
+  if (p.x < 0) p.x = viewWidth;
+  if (p.x > viewWidth) p.x = 0;
+  if (p.y < 0) p.y = viewHeight;
+  if (p.y > viewHeight) p.y = 0;
 }
 
 // Click/tap ripple: nearby particles get a momentary outward kick, then
@@ -374,7 +396,7 @@ const RIPPLE_MAX_IMPULSE = 14;
 const RIPPLE_DECAY = 0.93;
 
 function triggerRipple(originX: number, originY: number) {
-  const radius = Math.min(canvas.width, canvas.height) * RIPPLE_RADIUS_RATIO;
+  const radius = Math.min(viewWidth, viewHeight) * RIPPLE_RADIUS_RATIO;
   for (const p of particles) {
     const dx = p.x - originX;
     const dy = p.y - originY;
@@ -401,74 +423,132 @@ function applyRipple(p: Particle) {
 if (!prefersReducedMotion) {
   canvas.addEventListener('pointerdown', (event) => {
     const rect = canvas.getBoundingClientRect();
-    const x = (event.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (event.clientY - rect.top) * (canvas.height / rect.height);
-    triggerRipple(x, y);
+    triggerRipple(event.clientX - rect.left, event.clientY - rect.top);
   });
+}
+
+// Continuous cursor distortion field: unlike the click ripple above, this
+// has no decay state of its own - every frame it just reads the pointer's
+// current position and pushes nearby particles outward in proportion to
+// how close they are. Move the cursor away and the push term shrinks back
+// toward 0 on its own (pure function of live distance), so particles drift
+// back into their normal flow without any bounce/spring to overshoot.
+const CURSOR_FIELD_RADIUS_RATIO = 0.12;
+const CURSOR_FIELD_STRENGTH = 1.1;
+let cursorFieldX = -Infinity;
+let cursorFieldY = -Infinity;
+
+function applyCursorField(p: Particle) {
+  const radius = Math.min(viewWidth, viewHeight) * CURSOR_FIELD_RADIUS_RATIO;
+  const dx = p.x - cursorFieldX;
+  const dy = p.y - cursorFieldY;
+  const dist = Math.hypot(dx, dy);
+  if (dist >= radius || dist < 0.0001) return;
+  const falloff = 1 - dist / radius;
+  p.x += (dx / dist) * falloff * CURSOR_FIELD_STRENGTH;
+  p.y += (dy / dist) * falloff * CURSOR_FIELD_STRENGTH;
+}
+
+if (!prefersReducedMotion) {
+  window.addEventListener('mousemove', (event) => {
+    const rect = canvas.getBoundingClientRect();
+    cursorFieldX = event.clientX - rect.left;
+    cursorFieldY = event.clientY - rect.top;
+  });
+  window.addEventListener('mouseleave', () => {
+    cursorFieldX = -Infinity;
+    cursorFieldY = -Infinity;
+  });
+}
+
+// Depth layers: each mode's particle budget is split across back/mid/front
+// so the flow field reads as layers of depth rather than one flat plane -
+// back is smaller/slower/faintest, front is bigger/faster/most opaque.
+type ParticleLayer = 'back' | 'mid' | 'front';
+const PARTICLE_LAYERS: ParticleLayer[] = ['back', 'mid', 'front'];
+
+const LAYER_CONFIG: Record<
+  ParticleLayer,
+  { countRatio: number; speedMul: number; turbulenceMul: number; sizeMul: number; alpha: number }
+> = {
+  back: { countRatio: 0.45, speedMul: 0.55, turbulenceMul: 0.6, sizeMul: 0.65, alpha: 0.35 },
+  mid: { countRatio: 0.35, speedMul: 1, turbulenceMul: 1, sizeMul: 1, alpha: 0.7 },
+  front: { countRatio: 0.2, speedMul: 1.7, turbulenceMul: 1.5, sizeMul: 1.45, alpha: 1 },
+};
+
+function layerForIndex(index: number, count: number): ParticleLayer {
+  const backEnd = count * LAYER_CONFIG.back.countRatio;
+  const midEnd = backEnd + count * LAYER_CONFIG.mid.countRatio;
+  if (index < backEnd) return 'back';
+  if (index < midEnd) return 'mid';
+  return 'front';
+}
+
+// Cloudy's directional field, precomputed on a coarse grid once per frame
+// instead of re-running the sin/cos formula for every particle - each
+// particle then just reads its direction back with a cheap bilinear
+// lookup, which stays cheap even as the particle budget grows.
+const NOISE_GRID_SIZE = 40;
+const noiseGrid = new Float32Array(NOISE_GRID_SIZE * NOISE_GRID_SIZE);
+
+function computeNoiseGrid(time: number) {
+  for (let gy = 0; gy < NOISE_GRID_SIZE; gy++) {
+    const y = (gy / (NOISE_GRID_SIZE - 1)) * viewHeight;
+    for (let gx = 0; gx < NOISE_GRID_SIZE; gx++) {
+      const x = (gx / (NOISE_GRID_SIZE - 1)) * viewWidth;
+      noiseGrid[gy * NOISE_GRID_SIZE + gx] = fieldAngle(x, y, time);
+    }
+  }
+}
+
+function sampleNoiseGrid(x: number, y: number): number {
+  const gx = clamp((x / viewWidth) * (NOISE_GRID_SIZE - 1), 0, NOISE_GRID_SIZE - 1);
+  const gy = clamp((y / viewHeight) * (NOISE_GRID_SIZE - 1), 0, NOISE_GRID_SIZE - 1);
+  const x0 = Math.floor(gx);
+  const x1 = Math.min(x0 + 1, NOISE_GRID_SIZE - 1);
+  const y0 = Math.floor(gy);
+  const y1 = Math.min(y0 + 1, NOISE_GRID_SIZE - 1);
+  const tx = gx - x0;
+  const ty = gy - y0;
+  const v00 = noiseGrid[y0 * NOISE_GRID_SIZE + x0];
+  const v10 = noiseGrid[y0 * NOISE_GRID_SIZE + x1];
+  const v01 = noiseGrid[y1 * NOISE_GRID_SIZE + x0];
+  const v11 = noiseGrid[y1 * NOISE_GRID_SIZE + x1];
+  return lerp(lerp(v00, v10, tx), lerp(v01, v11, tx), ty);
 }
 
 // Sunny: sparse, small, bright motes drifting slowly upward with an
 // occasional brightness twinkle - not following the curl field at all.
-function updateSunnyParticle(p: Particle, time: number) {
-  p.x += Math.sin(time + p.seed * Math.PI * 2) * 0.4 + flowBias.x * 0.5;
-  p.y += -0.5 - flowSpeed * 0.15;
+function updateSunnyParticle(p: Particle, time: number, layer: ParticleLayer) {
+  const cfg = LAYER_CONFIG[layer];
+  p.x += (Math.sin(time + p.seed * Math.PI * 2) * 0.4 + flowBias.x * 0.5) * cfg.speedMul;
+  p.y += (-0.5 - flowSpeed * 0.15) * cfg.speedMul;
 }
 
-function drawSunnyParticle(p: Particle, color: [number, number, number], time: number) {
-  const twinkle = 0.5 + 0.5 * Math.sin(time * 4 + p.seed * 30);
-  ctx.globalAlpha = 0.5 + twinkle * 0.5;
-  ctx.fillStyle = rgbString(color);
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, 1 + twinkle * 0.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-}
-
-// Cloudy: large, soft, high-density blobs (faked blur via radial
-// gradient) drifting together slowly with the ambient wind.
-function updateCloudyParticle(p: Particle, time: number) {
-  const angle = fieldAngle(p.x, p.y, time * 0.5);
+// Cloudy: large, soft, high-density blobs drifting together slowly with
+// the ambient wind.
+function updateCloudyParticle(p: Particle, layer: ParticleLayer) {
+  const cfg = LAYER_CONFIG[layer];
+  const angle = sampleNoiseGrid(p.x, p.y);
   let vx = Math.cos(angle) * 0.5 + flowBias.x;
   let vy = Math.sin(angle) * 0.5 + flowBias.y;
 
   if (flowTurbulence > 0) {
-    vx += (Math.random() - 0.5) * flowTurbulence * 0.5;
-    vy += (Math.random() - 0.5) * flowTurbulence * 0.5;
+    vx += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
+    vy += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
   }
 
   const len = Math.hypot(vx, vy) || 1;
-  p.x += (vx / len) * flowSpeed * 0.6;
-  p.y += (vy / len) * flowSpeed * 0.6;
-}
-
-function drawCloudyParticle(p: Particle, color: [number, number, number], time: number) {
-  const radius = 5 + Math.sin(p.seed * 10 + time) * 1.5 + 3;
-  const [r, g, b] = color;
-  const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius);
-  gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.5)`);
-  gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-  ctx.fill();
+  p.x += (vx / len) * flowSpeed * 0.6 * cfg.speedMul;
+  p.y += (vy / len) * flowSpeed * 0.6 * cfg.speedMul;
 }
 
 // Rainy: thin, fast-falling streaks slanted by wind, plus a subtle
 // vertical noise overlay across the whole screen.
-function updateRainParticle(p: Particle) {
-  p.x += flowBias.x * 1.5 + (Math.random() - 0.5) * flowTurbulence * 2;
-  p.y += 6 + flowSpeed * 1.5;
-}
-
-function drawRainParticle(p: Particle, color: [number, number, number]) {
-  const length = 8 + Math.abs(flowBias.x) * 4;
-  const slantX = flowBias.x * 3;
-  ctx.strokeStyle = rgbString(color);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(p.x, p.y);
-  ctx.lineTo(p.x - slantX, p.y - length);
-  ctx.stroke();
+function updateRainParticle(p: Particle, layer: ParticleLayer) {
+  const cfg = LAYER_CONFIG[layer];
+  p.x += flowBias.x * 1.5 + (Math.random() - 0.5) * flowTurbulence * 2 * cfg.turbulenceMul;
+  p.y += (6 + flowSpeed * 1.5) * cfg.speedMul;
 }
 
 function drawRainNoiseOverlay() {
@@ -476,8 +556,8 @@ function drawRainNoiseOverlay() {
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
   ctx.lineWidth = 1;
   for (let i = 0; i < 40; i++) {
-    const x = Math.random() * canvas.width;
-    const y = Math.random() * canvas.height;
+    const x = Math.random() * viewWidth;
+    const y = Math.random() * viewHeight;
     const streakLength = 10 + Math.random() * 30;
     ctx.beginPath();
     ctx.moveTo(x, y);
@@ -487,35 +567,89 @@ function drawRainNoiseOverlay() {
   ctx.restore();
 }
 
+// Batching: every particle of a given depth layer is added as a subpath of
+// that layer's single Path2D, then filled/stroked exactly once - instead
+// of a beginPath/fill (or stroke) per particle, it's one draw call per
+// layer (at most 3) no matter how many particles are on screen.
+function addCircleToPath(path: Path2D, x: number, y: number, radius: number) {
+  path.moveTo(x + radius, y);
+  path.arc(x, y, radius, 0, Math.PI * 2);
+}
+
+function fillParticlePath(path: Path2D, color: [number, number, number], alpha: number) {
+  ctx.fillStyle = rgbString(color);
+  ctx.globalAlpha = alpha;
+  ctx.fill(path);
+  ctx.globalAlpha = 1;
+}
+
+function strokeRainPath(path: Path2D, color: [number, number, number], alpha: number, lineWidth: number) {
+  ctx.strokeStyle = rgbString(color);
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke(path);
+  ctx.globalAlpha = 1;
+}
+
 function drawFrame(time: number) {
   const [br, bg, bb] = backgroundRGB;
   ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, ${TRAIL_FADE_ALPHA[currentWeatherMode]})`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, viewWidth, viewHeight);
 
   if (currentWeatherMode === 'rainy') {
     drawRainNoiseOverlay();
   }
+  if (currentWeatherMode === 'cloudy') {
+    computeNoiseGrid(time * 0.5);
+  }
 
   const renderColor = resolveParticleColor(currentWeatherMode, particleColorRGB);
-  const count = MODE_PARTICLE_COUNT[currentWeatherMode];
+  const count = Math.round(MODE_PARTICLE_COUNT[currentWeatherMode] * particleCountRatio);
+
+  const layerPaths: Record<ParticleLayer, Path2D> = {
+    back: new Path2D(),
+    mid: new Path2D(),
+    front: new Path2D(),
+  };
+
   for (let i = 0; i < count; i++) {
     const p = particles[i];
+    const layer = layerForIndex(i, count);
+    const cfg = LAYER_CONFIG[layer];
+    const path = layerPaths[layer];
 
     if (currentWeatherMode === 'sunny') {
-      updateSunnyParticle(p, time);
+      updateSunnyParticle(p, time, layer);
+      applyCursorField(p);
       applyRipple(p);
       wrapParticle(p);
-      drawSunnyParticle(p, renderColor, time);
+      const twinkle = 0.5 + 0.5 * Math.sin(time * 4 + p.seed * 30);
+      addCircleToPath(path, p.x, p.y, (1 + twinkle * 0.8) * cfg.sizeMul);
     } else if (currentWeatherMode === 'cloudy') {
-      updateCloudyParticle(p, time);
+      updateCloudyParticle(p, layer);
+      applyCursorField(p);
       applyRipple(p);
       wrapParticle(p);
-      drawCloudyParticle(p, renderColor, time);
+      const radius = 5 + Math.sin(p.seed * 10 + time) * 1.5 + 3;
+      addCircleToPath(path, p.x, p.y, radius * cfg.sizeMul);
     } else {
-      updateRainParticle(p);
+      updateRainParticle(p, layer);
+      applyCursorField(p);
       applyRipple(p);
       wrapParticle(p);
-      drawRainParticle(p, renderColor);
+      const length = (8 + Math.abs(flowBias.x) * 4) * cfg.sizeMul;
+      const slantX = flowBias.x * 3;
+      path.moveTo(p.x, p.y);
+      path.lineTo(p.x - slantX, p.y - length);
+    }
+  }
+
+  for (const layer of PARTICLE_LAYERS) {
+    const cfg = LAYER_CONFIG[layer];
+    if (currentWeatherMode === 'rainy') {
+      strokeRainPath(layerPaths[layer], renderColor, cfg.alpha, cfg.sizeMul);
+    } else {
+      fillParticlePath(layerPaths[layer], renderColor, cfg.alpha);
     }
   }
 }
