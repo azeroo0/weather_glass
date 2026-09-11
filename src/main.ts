@@ -390,6 +390,38 @@ if (prefersReducedMotion) {
   });
 }
 
+// Hero title reveal: split into words, each masked by its own clip-path
+// (see .intro-title .word in style.css) that starts fully hidden from the
+// bottom and sweeps upward to fully visible - a wipe, not a fade. Runs
+// once immediately on load, staggered per word.
+function wrapWordsForReveal(el: HTMLElement): HTMLElement[] {
+  const words = (el.textContent ?? '').split(' ').filter(Boolean);
+  el.textContent = '';
+  const wordEls = words.map((word, i) => {
+    const span = document.createElement('span');
+    span.className = 'word';
+    span.textContent = word;
+    el.appendChild(span);
+    if (i < words.length - 1) el.appendChild(document.createTextNode(' '));
+    return span;
+  });
+  return wordEls;
+}
+
+const introTitleEl = document.querySelector<HTMLElement>('.intro-title')!;
+const introTitleWords = wrapWordsForReveal(introTitleEl);
+
+if (prefersReducedMotion) {
+  gsap.set(introTitleWords, { clipPath: 'inset(0% 0 0 0)' });
+} else {
+  gsap.to(introTitleWords, {
+    clipPath: 'inset(0% 0 0 0)',
+    duration: 0.9,
+    stagger: 0.08,
+    ease: 'power3.out',
+  });
+}
+
 function fieldAngle(x: number, y: number, time: number): number {
   return Math.sin(x * 0.01 + time) + Math.cos(y * 0.01 + time);
 }
@@ -472,6 +504,34 @@ if (!prefersReducedMotion) {
     cursorFieldX = -Infinity;
     cursorFieldY = -Infinity;
   });
+}
+
+// Weak, ambient pull toward the hero title so particles read as gathering
+// around it instead of drifting past uniformly. Scoped to the hero: it
+// fades out with window.scrollY (gone by the time the intro section's own
+// height has been scrolled past) so it never fights the chapters' weather
+// blend further down the page.
+const introEl = document.querySelector<HTMLElement>('.intro')!;
+const HERO_ATTRACTION_STRENGTH = 0.5;
+const HERO_ATTRACTION_RADIUS_RATIO = 0.6;
+
+function applyHeroTitleAttraction(p: Particle) {
+  const introHeight = introEl.offsetHeight || viewHeight;
+  const strength = clamp(1 - window.scrollY / introHeight, 0, 1) * HERO_ATTRACTION_STRENGTH;
+  if (strength <= 0.001) return;
+
+  const rect = introTitleEl.getBoundingClientRect();
+  const anchorX = rect.left + rect.width / 2;
+  const anchorY = rect.top + rect.height / 2;
+  const radius = Math.min(viewWidth, viewHeight) * HERO_ATTRACTION_RADIUS_RATIO;
+
+  const dx = anchorX - p.x;
+  const dy = anchorY - p.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist >= radius || dist < 0.0001) return;
+  const falloff = 1 - dist / radius;
+  p.x += (dx / dist) * falloff * strength;
+  p.y += (dy / dist) * falloff * strength;
 }
 
 // Depth layers: each frame's particle budget is split across back/mid/front
@@ -654,6 +714,7 @@ function drawFrame(time: number) {
     const { vx, vy } = computeBlendedVelocity(p, time, weights, cfg);
     p.x += vx;
     p.y += vy;
+    applyHeroTitleAttraction(p);
     applyCursorField(p);
     applyRipple(p);
     wrapParticle(p);
@@ -938,7 +999,28 @@ const DEFAULT_CITIES: Array<{ name: string; lat: number; lon: number }> = [
 ];
 
 DEFAULT_CITIES.forEach(({ name, lat, lon }) => createChapter(name, lat, lon));
-loadAllChapterWeather();
+
+// --- Hero teaser card: previews chapters[0] (the first city) ---
+
+const heroTeaserEl = document.querySelector<HTMLButtonElement>('#heroTeaser')!;
+const heroTeaserNameEl = document.querySelector<HTMLSpanElement>('#heroTeaserName')!;
+const heroTeaserTempEl = document.querySelector<HTMLSpanElement>('#heroTeaserTemp')!;
+
+function renderHeroTeaser() {
+  const firstChapter = chapters[0];
+  if (!firstChapter) return;
+  heroTeaserNameEl.textContent = firstChapter.name;
+  heroTeaserTempEl.textContent =
+    firstChapter.weather !== undefined ? `${Math.round(firstChapter.weather.temperature)}°` : '--°';
+}
+
+heroTeaserEl.addEventListener('click', () => {
+  const firstChapter = chapters[0];
+  if (firstChapter) scrollToChapter(firstChapter);
+});
+
+renderHeroTeaser();
+loadAllChapterWeather().then(renderHeroTeaser);
 
 // --- City search (Open-Meteo Geocoding API) ---
 // Selecting a result adds a brand new pinned chapter (see createChapter)

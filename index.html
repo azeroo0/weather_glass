@@ -23,8 +23,21 @@
 
     <main>
       <section class="intro">
-        <h1>오늘의 공기를 흐름으로 그리다</h1>
-        <p>도시마다 다른 바람과 비, 햇빛의 흐름을 따라 스크롤해보세요.</p>
+        <div class="intro-copy">
+          <h1 class="intro-title">오늘의 공기를 흐름으로 그리다</h1>
+          <p class="intro-subtitle">도시마다 다른 바람과 비, 햇빛의 흐름을 따라 스크롤해보세요.</p>
+        </div>
+
+        <button type="button" id="heroTeaser" class="hero-teaser">
+          <span id="heroTeaserName" class="hero-teaser-name"></span>
+          <span id="heroTeaserTemp" class="hero-teaser-temp"></span>
+          <span class="hero-teaser-cta">스크롤해서 보기 →</span>
+        </button>
+
+        <div class="scroll-indicator" aria-hidden="true">
+          <span class="scroll-indicator-arrow">↓</span>
+          <span class="scroll-indicator-label">Scroll</span>
+        </div>
       </section>
 
       <section id="chapters" class="chapters"></section>
