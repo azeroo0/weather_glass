@@ -69,44 +69,8 @@ const particles: Particle[] = Array.from({ length: PARTICLE_COUNT }, () => ({
   rvy: 0,
 }));
 
-type ColorKeyframe = {
-  hour: number;
-  color: [number, number, number];
-};
-
-const PARTICLE_KEYFRAMES: ColorKeyframe[] = [
-  { hour: 0, color: [10, 10, 40] },
-  { hour: 6, color: [255, 183, 178] },
-  { hour: 12, color: [135, 206, 235] },
-  { hour: 18, color: [255, 140, 66] },
-  { hour: 24, color: [10, 10, 40] },
-];
-
-const BACKGROUND_KEYFRAMES: ColorKeyframe[] = [
-  { hour: 0, color: [6, 8, 20] },
-  { hour: 6, color: [76, 74, 110] },
-  { hour: 12, color: [176, 214, 235] },
-  { hour: 18, color: [92, 60, 66] },
-  { hour: 24, color: [6, 8, 20] },
-];
-
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
-}
-
-function interpolateKeyframes(keyframes: ColorKeyframe[], hour: number): [number, number, number] {
-  let i = 0;
-  while (i < keyframes.length - 2 && hour > keyframes[i + 1].hour) {
-    i++;
-  }
-  const from = keyframes[i];
-  const to = keyframes[i + 1];
-  const t = (hour - from.hour) / (to.hour - from.hour);
-  return [
-    lerp(from.color[0], to.color[0], t),
-    lerp(from.color[1], to.color[1], t),
-    lerp(from.color[2], to.color[2], t),
-  ];
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -126,10 +90,10 @@ function rgbString([r, g, b]: [number, number, number]): string {
 }
 
 function labelForTime(hour: number): string {
-  if (hour < 3 || hour >= 21) return '밤';
-  if (hour < 9) return '새벽';
-  if (hour < 15) return '정오';
-  return '황혼';
+  if (hour < 3 || hour >= 21) return 'Night';
+  if (hour < 9) return 'Dawn';
+  if (hour < 15) return 'Midday';
+  return 'Dusk';
 }
 
 function formatTime(hour: number): string {
@@ -157,47 +121,96 @@ interface CityWeather {
 }
 
 // WMO weathercode -> which "shape language" the flow field blends toward.
-// Rendering never snaps discretely between these - see WeatherSnapshot's
+// Each mode has a genuinely different physical character (background
+// gradient, particle shape, direction of travel, speed) rather than just a
+// different tint - see MODE_LOOK below. Thunderstorm reuses rain's motion
+// entirely and adds flash/shake on top (see maybeTriggerThunderFlash).
+// Rendering never snaps discretely between modes - see WeatherSnapshot's
 // modeWeights, which interpolate continuously between two cities' one-hot
 // vectors as the user scrubs through a chapter.
-type WeatherMode = 'sunny' | 'cloudy' | 'rainy';
+type WeatherMode = 'sunny' | 'cloudy' | 'rainy' | 'thunderstorm' | 'snowy';
+type ModeWeights = [number, number, number, number, number];
+
+const MODE_INDEX: Record<WeatherMode, 0 | 1 | 2 | 3 | 4> = {
+  sunny: 0,
+  cloudy: 1,
+  rainy: 2,
+  thunderstorm: 3,
+  snowy: 4,
+};
 
 function weatherModeFromCode(code: number): WeatherMode {
   if (code <= 1) return 'sunny';
   if (code === 2 || code === 3 || code === 45 || code === 48) return 'cloudy';
-  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 99)) return 'rainy';
+  if (code >= 71 && code <= 77) return 'snowy';
+  if (code >= 95 && code <= 99) return 'thunderstorm';
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 86)) return 'rainy';
   return 'cloudy';
 }
 
-const MODE_PARTICLE_COUNT: Record<WeatherMode, number> = {
-  sunny: 110,
-  cloudy: PARTICLE_COUNT,
-  rainy: 260,
-};
+// Each mode's full physical character in one place: a top-to-bottom
+// background gradient, an edge vignette strength, particle color/opacity/
+// count, and how quickly the trail-fade wipe erases the previous frame
+// (long persistence for rain's streaks, short for everything else). These
+// are "base" colors - dayBrightnessFactor scales them for time-of-day
+// without diluting the mode's own hue.
+interface ModeLook {
+  topColor: [number, number, number];
+  bottomColor: [number, number, number];
+  vignette: number;
+  particleColor: [number, number, number];
+  particleAlpha: number;
+  particleCount: number;
+  trailFadeAlpha: number;
+}
 
-// How fast each frame's fade-to-background overlay erases the previous
-// frame. Sunny/cloudy need a quick wipe so particles read as discrete
-// dots/blobs; rain keeps a slow wipe so its streaks accumulate into
-// visible sheets of rain. Blended continuously via WeatherSnapshot, same
-// as everything else below.
-const TRAIL_FADE_ALPHA: Record<WeatherMode, number> = {
-  sunny: 0.3,
-  cloudy: 0.18,
-  rainy: 0.05,
+const MODE_LOOK: Record<WeatherMode, ModeLook> = {
+  sunny: {
+    topColor: [255, 225, 158],
+    bottomColor: [173, 213, 236],
+    vignette: 0,
+    particleColor: [255, 250, 224],
+    particleAlpha: 0.9,
+    particleCount: 55,
+    trailFadeAlpha: 0.4,
+  },
+  cloudy: {
+    topColor: [122, 133, 145],
+    bottomColor: [98, 108, 120],
+    vignette: 0.12,
+    particleColor: [156, 163, 172],
+    particleAlpha: 0.38,
+    particleCount: 55,
+    trailFadeAlpha: 0.16,
+  },
+  rainy: {
+    topColor: [23, 28, 46],
+    bottomColor: [10, 12, 20],
+    vignette: 0.6,
+    particleColor: [196, 210, 224],
+    particleAlpha: 0.85,
+    particleCount: 260,
+    trailFadeAlpha: 0.08,
+  },
+  thunderstorm: {
+    topColor: [16, 18, 30],
+    bottomColor: [6, 7, 13],
+    vignette: 0.72,
+    particleColor: [205, 214, 228],
+    particleAlpha: 0.9,
+    particleCount: 260,
+    trailFadeAlpha: 0.08,
+  },
+  snowy: {
+    topColor: [236, 237, 241],
+    bottomColor: [213, 216, 223],
+    vignette: 0,
+    particleColor: [255, 255, 255],
+    particleAlpha: 0.95,
+    particleCount: 130,
+    trailFadeAlpha: 0.5,
+  },
 };
-
-// Brightness always comes from the time-of-day color (PARTICLE_KEYFRAMES
-// above) - weathercode only lays a light tint on top of it, so e.g. rainy
-// at noon still reads as clearly brighter than rainy at midnight. Keep
-// `strength` low; a high mix ratio would wash out the day/night signal
-// entirely, which is exactly the bug this fixes.
-const MODE_TINT: Record<WeatherMode, { color: [number, number, number]; strength: number }> = {
-  sunny: { color: [255, 210, 60], strength: 0.4 },
-  cloudy: { color: [150, 155, 165], strength: 0.4 },
-  rainy: { color: [15, 20, 50], strength: 0.35 },
-};
-
-const MODE_INDEX: Record<WeatherMode, 0 | 1 | 2> = { sunny: 0, cloudy: 1, rainy: 2 };
 
 // A fully-resolved "what the flow field should look like" for one city.
 // Every field here is a plain number/vector so two snapshots can be
@@ -205,55 +218,55 @@ const MODE_INDEX: Record<WeatherMode, 0 | 1 | 2> = { sunny: 0, cloudy: 1, rainy:
 // a fade between two rendered frames, is what makes a chapter transition
 // actually change the particles' color/shape/speed/density as you scroll.
 interface WeatherSnapshot {
-  modeWeights: [number, number, number]; // [sunny, cloudy, rainy]
+  modeWeights: ModeWeights;
   flowSpeed: number;
   flowBias: { x: number; y: number };
   flowTurbulence: number;
-  cloudDarkenFactor: number;
-  tintColor: [number, number, number];
-  tintStrength: number;
+  topColor: [number, number, number];
+  bottomColor: [number, number, number];
+  vignette: number;
+  particleColor: [number, number, number];
+  particleAlpha: number;
   particleCount: number;
   trailFadeAlpha: number;
 }
 
-const DEFAULT_SNAPSHOT: WeatherSnapshot = {
-  modeWeights: [0, 1, 0],
-  flowSpeed: 1.5,
-  flowBias: { x: 0, y: 0 },
-  flowTurbulence: 0,
-  cloudDarkenFactor: 1,
-  tintColor: MODE_TINT.cloudy.color,
-  tintStrength: MODE_TINT.cloudy.strength,
-  particleCount: MODE_PARTICLE_COUNT.cloudy,
-  trailFadeAlpha: TRAIL_FADE_ALPHA.cloudy,
-};
-
-function computeSnapshot(weather: CityWeather | undefined): WeatherSnapshot {
-  if (!weather) return DEFAULT_SNAPSHOT;
-
-  const mode = weatherModeFromCode(weather.weathercode);
-  const modeWeights: [number, number, number] = [0, 0, 0];
+function snapshotFromLook(mode: WeatherMode, look: ModeLook, weather: CityWeather | undefined): WeatherSnapshot {
+  const modeWeights: ModeWeights = [0, 0, 0, 0, 0];
   modeWeights[MODE_INDEX[mode]] = 1;
 
-  const flowSpeed = clamp(0.4 + weather.windspeed * 0.06, 0.4, 4.5);
-  const biasStrength = clamp(weather.windspeed / 20, 0.15, 1.5);
-  const flowBearing = (weather.winddirection + 180) % 360; // wind blows TOWARD this bearing
+  const windspeed = weather?.windspeed ?? 8;
+  const winddirection = weather?.winddirection ?? 0;
+  const precipitation = weather?.precipitation ?? 0;
+
+  const flowSpeed = clamp(0.4 + windspeed * 0.05, 0.4, 3.2);
+  const biasStrength = clamp(windspeed / 20, 0.15, 1.5);
+  const flowBearing = (winddirection + 180) % 360; // wind blows TOWARD this bearing
   const biasAngle = ((flowBearing - 90) * Math.PI) / 180; // meteorological bearing -> canvas angle
   const flowBias = { x: Math.cos(biasAngle) * biasStrength, y: Math.sin(biasAngle) * biasStrength };
-  const flowTurbulence = clamp(weather.precipitation * 0.15, 0, 1.2);
-  const cloudDarkenFactor = 1 - clamp(weather.cloudcover / 100, 0, 1) * 0.35;
+  const flowTurbulence = clamp(precipitation * 0.15, 0, 1.2);
 
   return {
     modeWeights,
     flowSpeed,
     flowBias,
     flowTurbulence,
-    cloudDarkenFactor,
-    tintColor: MODE_TINT[mode].color,
-    tintStrength: MODE_TINT[mode].strength,
-    particleCount: MODE_PARTICLE_COUNT[mode],
-    trailFadeAlpha: TRAIL_FADE_ALPHA[mode],
+    topColor: look.topColor,
+    bottomColor: look.bottomColor,
+    vignette: look.vignette,
+    particleColor: look.particleColor,
+    particleAlpha: look.particleAlpha,
+    particleCount: look.particleCount,
+    trailFadeAlpha: look.trailFadeAlpha,
   };
+}
+
+const DEFAULT_SNAPSHOT: WeatherSnapshot = snapshotFromLook('cloudy', MODE_LOOK.cloudy, undefined);
+
+function computeSnapshot(weather: CityWeather | undefined): WeatherSnapshot {
+  if (!weather) return DEFAULT_SNAPSHOT;
+  const mode = weatherModeFromCode(weather.weathercode);
+  return snapshotFromLook(mode, MODE_LOOK[mode], weather);
 }
 
 function blendSnapshots(a: WeatherSnapshot, b: WeatherSnapshot, t: number): WeatherSnapshot {
@@ -262,13 +275,17 @@ function blendSnapshots(a: WeatherSnapshot, b: WeatherSnapshot, t: number): Weat
       lerp(a.modeWeights[0], b.modeWeights[0], t),
       lerp(a.modeWeights[1], b.modeWeights[1], t),
       lerp(a.modeWeights[2], b.modeWeights[2], t),
+      lerp(a.modeWeights[3], b.modeWeights[3], t),
+      lerp(a.modeWeights[4], b.modeWeights[4], t),
     ],
     flowSpeed: lerp(a.flowSpeed, b.flowSpeed, t),
     flowBias: { x: lerp(a.flowBias.x, b.flowBias.x, t), y: lerp(a.flowBias.y, b.flowBias.y, t) },
     flowTurbulence: lerp(a.flowTurbulence, b.flowTurbulence, t),
-    cloudDarkenFactor: lerp(a.cloudDarkenFactor, b.cloudDarkenFactor, t),
-    tintColor: mixColor(a.tintColor, b.tintColor, t),
-    tintStrength: lerp(a.tintStrength, b.tintStrength, t),
+    topColor: mixColor(a.topColor, b.topColor, t),
+    bottomColor: mixColor(a.bottomColor, b.bottomColor, t),
+    vignette: lerp(a.vignette, b.vignette, t),
+    particleColor: mixColor(a.particleColor, b.particleColor, t),
+    particleAlpha: lerp(a.particleAlpha, b.particleAlpha, t),
     particleCount: lerp(a.particleCount, b.particleCount, t),
     trailFadeAlpha: lerp(a.trailFadeAlpha, b.trailFadeAlpha, t),
   };
@@ -276,20 +293,25 @@ function blendSnapshots(a: WeatherSnapshot, b: WeatherSnapshot, t: number): Weat
 
 // Effective values for *this* frame, recomputed at the top of drawFrame()
 // from the active chapter's blend. Kept as module state (rather than
-// threaded through every function) since applyAmbient()/the cursor dot
-// also need to read them outside the main particle loop.
+// threaded through every function) since the cursor dot also reads them
+// outside the main particle loop.
 let flowSpeed = DEFAULT_SNAPSHOT.flowSpeed;
 let flowBias = DEFAULT_SNAPSHOT.flowBias;
 let flowTurbulence = DEFAULT_SNAPSHOT.flowTurbulence;
-let cloudDarkenFactor = DEFAULT_SNAPSHOT.cloudDarkenFactor;
 
-function effectiveBackgroundRGB(hour: number): [number, number, number] {
-  const [r, g, b] = interpolateKeyframes(BACKGROUND_KEYFRAMES, hour);
-  return [r * cloudDarkenFactor, g * cloudDarkenFactor, b * cloudDarkenFactor];
+function scaleColor(color: [number, number, number], factor: number): [number, number, number] {
+  return [color[0] * factor, color[1] * factor, color[2] * factor];
 }
 
-let particleColorRGB = interpolateKeyframes(PARTICLE_KEYFRAMES, Number(slider.value));
-let backgroundRGB = effectiveBackgroundRGB(Number(slider.value));
+// The time slider no longer blends its own hue into the weather colors -
+// doing that was exactly what made every mode look like the same gray with
+// a slightly different tint. It now only scales brightness, so noon reads
+// brighter and midnight darker *within* whatever mode is showing, without
+// diluting that mode's own characteristic color.
+function dayBrightnessFactor(hour: number): number {
+  const cycle = Math.cos((2 * Math.PI * (hour - 12)) / 24); // 1 at noon, -1 at midnight
+  return lerp(0.55, 1.05, (cycle + 1) / 2);
+}
 
 function srgbChannelToLinear(channel: number): number {
   const s = channel / 255;
@@ -306,17 +328,14 @@ function relativeLuminance([r, g, b]: [number, number, number]): number {
 
 const CONTRAST_CROSSOVER_LUMINANCE = Math.sqrt(1.05 * 0.05) - 0.05;
 
-function applyAmbient(hour: number) {
-  backgroundRGB = effectiveBackgroundRGB(hour);
-  const [br, bg, bb] = backgroundRGB.map(Math.round);
-  document.body.style.backgroundColor = `rgb(${br}, ${bg}, ${bb})`;
-  document.body.classList.toggle('is-light', relativeLuminance(backgroundRGB) > CONTRAST_CROSSOVER_LUMINANCE);
+function setBodyAmbient(color: [number, number, number]) {
+  const rgb: [number, number, number] = [Math.round(color[0]), Math.round(color[1]), Math.round(color[2])];
+  document.body.style.backgroundColor = rgbString(rgb);
+  document.body.classList.toggle('is-light', relativeLuminance(rgb) > CONTRAST_CROSSOVER_LUMINANCE);
 }
 
 function updateFromSlider() {
   const hour = Number(slider.value);
-  particleColorRGB = interpolateKeyframes(PARTICLE_KEYFRAMES, hour);
-  applyAmbient(hour);
   timeDisplay.textContent = formatTime(hour);
   weatherLabel.textContent = labelForTime(hour);
   slider.setAttribute('aria-valuetext', `${formatTime(hour)}, ${labelForTime(hour)}`);
@@ -331,7 +350,7 @@ let playbackStartTime = 0;
 
 function stopDayPlayback() {
   isPlayingDay = false;
-  playButton.textContent = '▶ 하루 흐름 보기';
+  playButton.textContent = '▶ Play the day';
   playButton.setAttribute('aria-pressed', 'false');
 }
 
@@ -349,7 +368,7 @@ function playDayStep(now: number) {
 
 function startDayPlayback() {
   isPlayingDay = true;
-  playButton.textContent = '■ 정지';
+  playButton.textContent = '■ Stop';
   playButton.setAttribute('aria-pressed', 'true');
   playbackStartTime = performance.now();
   requestAnimationFrame(playDayStep);
@@ -369,7 +388,10 @@ slider.addEventListener('input', () => {
   }
   updateFromSlider();
 });
-updateFromSlider();
+// Not called here yet: under prefers-reduced-motion, updateFromSlider()
+// synchronously calls drawFrame(), which reads `chapters` - declared much
+// later in this file. Deferred to the bottom, after chapters/weather
+// setup has run, alongside the other post-setup kickoff calls.
 
 const fadeUpSections = document.querySelectorAll<HTMLElement>('.fade-up');
 if (prefersReducedMotion) {
@@ -420,10 +442,6 @@ if (prefersReducedMotion) {
     stagger: 0.08,
     ease: 'power3.out',
   });
-}
-
-function fieldAngle(x: number, y: number, time: number): number {
-  return Math.sin(x * 0.01 + time) + Math.cos(y * 0.01 + time);
 }
 
 function wrapParticle(p: Particle) {
@@ -562,93 +580,55 @@ function layerForIndex(index: number, count: number): ParticleLayer {
   return 'front';
 }
 
-// Cloudy's directional field, precomputed on a coarse grid once per frame
-// instead of re-running the sin/cos formula for every particle - each
-// particle then just reads its direction back with a cheap bilinear
-// lookup, which stays cheap even as the particle budget grows.
-const NOISE_GRID_SIZE = 40;
-const noiseGrid = new Float32Array(NOISE_GRID_SIZE * NOISE_GRID_SIZE);
-
-function computeNoiseGrid(time: number) {
-  for (let gy = 0; gy < NOISE_GRID_SIZE; gy++) {
-    const y = (gy / (NOISE_GRID_SIZE - 1)) * viewHeight;
-    for (let gx = 0; gx < NOISE_GRID_SIZE; gx++) {
-      const x = (gx / (NOISE_GRID_SIZE - 1)) * viewWidth;
-      noiseGrid[gy * NOISE_GRID_SIZE + gx] = fieldAngle(x, y, time);
-    }
-  }
-}
-
-function sampleNoiseGrid(x: number, y: number): number {
-  const gx = clamp((x / viewWidth) * (NOISE_GRID_SIZE - 1), 0, NOISE_GRID_SIZE - 1);
-  const gy = clamp((y / viewHeight) * (NOISE_GRID_SIZE - 1), 0, NOISE_GRID_SIZE - 1);
-  const x0 = Math.floor(gx);
-  const x1 = Math.min(x0 + 1, NOISE_GRID_SIZE - 1);
-  const y0 = Math.floor(gy);
-  const y1 = Math.min(y0 + 1, NOISE_GRID_SIZE - 1);
-  const tx = gx - x0;
-  const ty = gy - y0;
-  const v00 = noiseGrid[y0 * NOISE_GRID_SIZE + x0];
-  const v10 = noiseGrid[y0 * NOISE_GRID_SIZE + x1];
-  const v01 = noiseGrid[y1 * NOISE_GRID_SIZE + x0];
-  const v11 = noiseGrid[y1 * NOISE_GRID_SIZE + x1];
-  return lerp(lerp(v00, v10, tx), lerp(v01, v11, tx), ty);
-}
-
-// A particle's velocity is a weighted blend of all three modes' motion
-// formulas (weights sum to ~1) rather than picking one - this is what
-// makes a chapter transition actually morph the flow field's behavior
-// frame by frame, instead of cross-fading between two finished looks.
+// A particle's velocity is a weighted blend of all modes' motion formulas
+// (weights sum to ~1) rather than picking one - this is what makes a
+// chapter transition actually morph the flow field's behavior frame by
+// frame, instead of cross-fading between two finished looks. Thunderstorm
+// shares rain's velocity entirely (it only adds flash/shake on top), so
+// the two weights are combined into one "rainWeight" wherever motion or
+// shape is concerned.
 function computeBlendedVelocity(
   p: Particle,
   time: number,
-  weights: [number, number, number],
+  weights: ModeWeights,
   cfg: LayerConfig,
 ): { vx: number; vy: number } {
   let vx = 0;
   let vy = 0;
+  const rainWeight = weights[2] + weights[3];
 
   if (weights[0] > 0.001) {
-    vx += weights[0] * (Math.sin(time + p.seed * Math.PI * 2) * 0.4 + flowBias.x * 0.5) * cfg.speedMul;
-    vy += weights[0] * (-0.5 - flowSpeed * 0.15) * cfg.speedMul;
+    // Sunny: barely-there upward drift with a gentle sway - "중력을 거스르듯
+    // 아주 천천히 위로 부유".
+    const sway = Math.sin(time * 0.3 + p.seed * Math.PI * 2) * 0.15;
+    vx += weights[0] * sway * cfg.speedMul;
+    vy += weights[0] * (-0.1 - flowSpeed * 0.03) * cfg.speedMul;
   }
 
   if (weights[1] > 0.001) {
-    const angle = sampleNoiseGrid(p.x, p.y);
-    let cvx = Math.cos(angle) * 0.5 + flowBias.x;
-    let cvy = Math.sin(angle) * 0.5 + flowBias.y;
-    if (flowTurbulence > 0) {
-      cvx += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
-      cvy += (Math.random() - 0.5) * flowTurbulence * 0.5 * cfg.turbulenceMul;
-    }
-    const len = Math.hypot(cvx, cvy) || 1;
-    vx += weights[1] * (cvx / len) * flowSpeed * 0.6 * cfg.speedMul;
-    vy += weights[1] * (cvy / len) * flowSpeed * 0.6 * cfg.speedMul;
+    // Cloudy: purely horizontal, no vertical motion at all - layered fog
+    // banks sliding sideways, each depth layer at its own speed.
+    const direction = flowBias.x >= 0 ? 1 : -1;
+    const drift = (0.5 + Math.abs(flowBias.x) * 0.7) * direction;
+    vx += weights[1] * drift * cfg.speedMul;
   }
 
-  if (weights[2] > 0.001) {
-    vx += weights[2] * (flowBias.x * 1.5 + (Math.random() - 0.5) * flowTurbulence * 2 * cfg.turbulenceMul);
-    vy += weights[2] * (6 + flowSpeed * 1.5) * cfg.speedMul;
+  if (rainWeight > 0.001) {
+    // Rain (and thunderstorm): fast, near-vertical fall with a
+    // wind-driven horizontal kick - "빠르게 아래로 떨어짐".
+    vx += rainWeight * (flowBias.x * 2 + (Math.random() - 0.5) * flowTurbulence * cfg.turbulenceMul);
+    vy += rainWeight * (13 + flowSpeed * 3) * cfg.speedMul;
+  }
+
+  if (weights[4] > 0.001) {
+    // Snow: slow fall with a wide, slow side-to-side sway - "크고 부드럽게
+    // 좌우로 살랑이며".
+    const sway = Math.sin(time * 0.6 + p.seed * Math.PI * 2) * 1.1;
+    vx += weights[4] * sway * cfg.speedMul;
+    vy += weights[4] * (1.1 + flowSpeed * 0.25) * cfg.speedMul;
   }
 
   return { vx, vy };
-}
-
-function drawRainNoiseOverlay(alpha: number) {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
-  ctx.globalAlpha = alpha;
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 40; i++) {
-    const x = Math.random() * viewWidth;
-    const y = Math.random() * viewHeight;
-    const streakLength = 10 + Math.random() * 30;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x, y + streakLength);
-    ctx.stroke();
-  }
-  ctx.restore();
 }
 
 // Batching: every particle of a given depth layer is added as a subpath of
@@ -660,11 +640,13 @@ function addCircleToPath(path: Path2D, x: number, y: number, radius: number) {
   path.arc(x, y, radius, 0, Math.PI * 2);
 }
 
-function fillParticlePath(path: Path2D, color: [number, number, number], alpha: number) {
+function fillParticlePath(path: Path2D, color: [number, number, number], alpha: number, blurPx: number) {
+  ctx.save();
+  if (blurPx > 0.5) ctx.filter = `blur(${blurPx}px)`;
   ctx.fillStyle = rgbString(color);
   ctx.globalAlpha = alpha;
   ctx.fill(path);
-  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 function strokeStreakPath(path: Path2D, color: [number, number, number], alpha: number, lineWidth: number) {
@@ -675,31 +657,143 @@ function strokeStreakPath(path: Path2D, color: [number, number, number], alpha: 
   ctx.globalAlpha = 1;
 }
 
+// Top-to-bottom gradient wash, painted at trailFadeAlpha (not full opacity)
+// so the previous frame's particles persist and fade rather than being
+// wiped clean every frame - this is what gives rain's streaks their trail
+// and sunny's motes their soft afterglow.
+function drawModeBackground(
+  topColor: [number, number, number],
+  bottomColor: [number, number, number],
+  alpha: number,
+) {
+  const gradient = ctx.createLinearGradient(0, 0, 0, viewHeight);
+  gradient.addColorStop(0, rgbString(topColor));
+  gradient.addColorStop(1, rgbString(bottomColor));
+  ctx.fillStyle = gradient;
+  ctx.globalAlpha = alpha;
+  ctx.fillRect(0, 0, viewWidth, viewHeight);
+  ctx.globalAlpha = 1;
+}
+
+// A dark radial overlay drawn fresh every frame (not trailed) so it always
+// reads as a crisp, stable vignette rather than smearing with the trail
+// wash above.
+function drawVignette(strength: number) {
+  if (strength <= 0.01) return;
+  const cx = viewWidth / 2;
+  const cy = viewHeight / 2;
+  const outerRadius = Math.max(viewWidth, viewHeight) * 0.75;
+  const gradient = ctx.createRadialGradient(cx, cy, outerRadius * 0.35, cx, cy, outerRadius);
+  gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  gradient.addColorStop(1, `rgba(0, 0, 0, ${strength * 0.8})`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, viewWidth, viewHeight);
+}
+
+// Rain splashes: a short-lived mark spawned wherever a rain-weighted
+// particle actually reaches the bottom edge (see drawFrame), rendered as
+// two small ticks flaring outward and fading over SPLASH_LIFETIME_MS. Kept
+// as its own tiny system rather than folded into the particle pool because
+// splashes are momentary events, not part of the continuous flow.
+interface Splash {
+  x: number;
+  startedAt: number;
+}
+
+const splashes: Splash[] = [];
+const SPLASH_LIFETIME_MS = 260;
+
+function drawSplashes(now: number, color: [number, number, number], rainWeight: number) {
+  if (splashes.length === 0) return;
+  const path = new Path2D();
+  let alphaSum = 0;
+  let kept = 0;
+
+  for (let i = splashes.length - 1; i >= 0; i--) {
+    const age = now - splashes[i].startedAt;
+    if (age >= SPLASH_LIFETIME_MS) {
+      splashes.splice(i, 1);
+      continue;
+    }
+    const t = age / SPLASH_LIFETIME_MS;
+    const spread = 3 + t * 7;
+    const y = viewHeight - t * 3;
+    path.moveTo(splashes[i].x - spread, y + spread * 0.6);
+    path.lineTo(splashes[i].x, y - spread * 0.5);
+    path.lineTo(splashes[i].x + spread, y + spread * 0.6);
+    alphaSum += (1 - t) * rainWeight;
+    kept++;
+  }
+
+  if (kept === 0) return;
+  ctx.strokeStyle = rgbString(color);
+  ctx.lineWidth = 1.2;
+  ctx.globalAlpha = clamp(alphaSum / kept, 0, 1);
+  ctx.stroke(path);
+  ctx.globalAlpha = 1;
+}
+
+// Thunderstorm flash + shake: a random gap of 5-12s, then a sub-100ms
+// white flash immediately followed by a brief 2-3px shake of the canvas
+// element itself (the flow field keeps flowing normally underneath - only
+// the visual layer jitters). Entirely disabled under prefers-reduced-motion,
+// since a flashing screen is a textbook seizure trigger.
+let nextThunderFlashAt = prefersReducedMotion ? Infinity : performance.now() + 5000 + Math.random() * 7000;
+let thunderFlashEndAt = 0;
+let thunderShakeEndAt = 0;
+
+function maybeTriggerThunderFlash(now: number, thunderWeight: number) {
+  if (prefersReducedMotion || thunderWeight < 0.5) return;
+  if (now < nextThunderFlashAt) return;
+  thunderFlashEndAt = now + 60 + Math.random() * 40;
+  thunderShakeEndAt = thunderFlashEndAt + 220;
+  nextThunderFlashAt = now + 5000 + Math.random() * 7000;
+}
+
+function drawThunderFlash(now: number) {
+  if (now >= thunderFlashEndAt) return;
+  const remaining = clamp((thunderFlashEndAt - now) / 90, 0, 1);
+  ctx.fillStyle = '#fff';
+  ctx.globalAlpha = remaining * 0.85;
+  ctx.fillRect(0, 0, viewWidth, viewHeight);
+  ctx.globalAlpha = 1;
+}
+
+function applyScreenShake(now: number) {
+  if (now >= thunderFlashEndAt && now < thunderShakeEndAt) {
+    const dx = (Math.random() - 0.5) * 5;
+    const dy = (Math.random() - 0.5) * 5;
+    canvas.style.transform = `translate(${dx}px, ${dy}px)`;
+  } else {
+    canvas.style.transform = 'none';
+  }
+}
+
 function drawFrame(time: number) {
+  const now = performance.now();
   const prevChapter = chapters[Math.max(activeChapterIndex - 1, 0)];
   const currentChapter = chapters[activeChapterIndex];
   const prevSnapshot = prevChapter?.snapshot ?? DEFAULT_SNAPSHOT;
   const currentSnapshot = currentChapter?.snapshot ?? DEFAULT_SNAPSHOT;
   const blend = blendSnapshots(prevSnapshot, currentSnapshot, chapterProgress);
   const weights = blend.modeWeights;
+  const rainWeight = weights[2] + weights[3];
+  const thunderWeight = weights[3];
 
   flowSpeed = blend.flowSpeed;
   flowBias = blend.flowBias;
   flowTurbulence = blend.flowTurbulence;
-  cloudDarkenFactor = blend.cloudDarkenFactor;
-  applyAmbient(Number(slider.value));
-  updateCursorColor(blend.tintColor);
 
-  const [br, bg, bb] = backgroundRGB;
-  ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, ${blend.trailFadeAlpha})`;
-  ctx.fillRect(0, 0, viewWidth, viewHeight);
+  const brightness = dayBrightnessFactor(Number(slider.value));
+  const topColor = scaleColor(blend.topColor, brightness);
+  const bottomColor = scaleColor(blend.bottomColor, brightness);
+  setBodyAmbient(bottomColor);
 
-  computeNoiseGrid(time * 0.5);
-  if (weights[2] > 0.02) {
-    drawRainNoiseOverlay(weights[2] * 0.08);
-  }
+  const renderColor = scaleColor(blend.particleColor, Math.min(1.15, brightness));
+  updateCursorColor(renderColor);
 
-  const renderColor = mixColor(particleColorRGB, blend.tintColor, blend.tintStrength);
+  drawModeBackground(topColor, bottomColor, blend.trailFadeAlpha);
+
   const count = Math.round(blend.particleCount * particleCountRatio);
 
   const dotPaths: Record<ParticleLayer, Path2D> = { back: new Path2D(), mid: new Path2D(), front: new Path2D() };
@@ -717,33 +811,49 @@ function drawFrame(time: number) {
     applyHeroTitleAttraction(p);
     applyCursorField(p);
     applyRipple(p);
+
+    if (rainWeight > 0.3 && p.y > viewHeight && splashes.length < 80) {
+      splashes.push({ x: p.x, startedAt: now });
+    }
     wrapParticle(p);
 
-    const twinkle = 0.5 + 0.5 * Math.sin(time * 4 + p.seed * 30);
-    const sunnyRadius = 1 + twinkle * 0.8;
-    const cloudyRadius = 5 + Math.sin(p.seed * 10 + time) * 1.5 + 3;
-    const rainRadius = 1.2;
+    // Occasional per-particle "flare" - a sharp, rare spike (near 0 most
+    // of the time, briefly near 1) rather than a smooth twinkle, so it
+    // reads as a lens-flare-like flash-and-fade instead of continuous
+    // sparkle.
+    const flare = Math.pow(Math.max(0, Math.sin(time * 0.15 + p.seed * 41)), 30);
+    const sunnyRadius = (1 + flare * 4) * cfg.sizeMul;
+    const cloudyRadius = (48 + Math.sin(p.seed * 3 + time * 0.15) * 12) * cfg.sizeMul;
+    const rainHeadRadius = 0.8 * cfg.sizeMul;
+    const snowRadius = (5 + Math.sin(p.seed * 7 + time * 0.5) * 1.6) * cfg.sizeMul;
     const radius =
-      (weights[0] * sunnyRadius + weights[1] * cloudyRadius + weights[2] * rainRadius) * cfg.sizeMul;
+      weights[0] * sunnyRadius + weights[1] * cloudyRadius + rainWeight * rainHeadRadius + weights[4] * snowRadius;
     addCircleToPath(dotPaths[layer], p.x, p.y, radius);
 
-    if (weights[2] > 0.02) {
-      const length = (8 + Math.abs(flowBias.x) * 4) * cfg.sizeMul * weights[2];
-      const slantX = flowBias.x * 3 * weights[2];
+    if (rainWeight > 0.02) {
+      const length = 24 * cfg.sizeMul * rainWeight;
+      const slantX = flowBias.x * 4 * rainWeight;
       streakPaths[layer].moveTo(p.x, p.y);
       streakPaths[layer].lineTo(p.x - slantX, p.y - length);
       hasStreaks[layer] = true;
     }
   }
 
-  const dotAlphaBase = weights[0] * 0.85 + weights[1] * 0.55 + weights[2] * 0.75;
+  const cloudyBlurPx = weights[1] * 16;
   for (const layer of PARTICLE_LAYERS) {
     const cfg = LAYER_CONFIG[layer];
-    fillParticlePath(dotPaths[layer], renderColor, dotAlphaBase * cfg.alpha);
+    fillParticlePath(dotPaths[layer], renderColor, blend.particleAlpha * cfg.alpha, cloudyBlurPx);
     if (hasStreaks[layer]) {
-      strokeStreakPath(streakPaths[layer], renderColor, weights[2] * 0.9 * cfg.alpha, cfg.sizeMul);
+      strokeStreakPath(streakPaths[layer], renderColor, blend.particleAlpha * cfg.alpha * rainWeight, cfg.sizeMul);
     }
   }
+
+  drawSplashes(now, renderColor, rainWeight);
+  drawVignette(blend.vignette);
+
+  maybeTriggerThunderFlash(now, thunderWeight);
+  drawThunderFlash(now);
+  applyScreenShake(now);
 }
 
 function step() {
@@ -768,16 +878,16 @@ let lastFetchTime: Date | null = null;
 
 function formatRelativeUpdate(date: Date): string {
   const seconds = Math.round((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return '방금 전';
+  if (seconds < 60) return 'just now';
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
-  return `${hours}시간 전`;
+  return `${hours} hr ago`;
 }
 
 function renderLastUpdated() {
   if (!lastFetchTime) return;
-  lastUpdatedEl.textContent = `마지막 업데이트: ${formatRelativeUpdate(lastFetchTime)}`;
+  lastUpdatedEl.textContent = `Last updated ${formatRelativeUpdate(lastFetchTime)}`;
 }
 
 setInterval(renderLastUpdated, 30000);
@@ -1134,28 +1244,7 @@ const DEFAULT_CITIES: Array<{ name: string; lat: number; lon: number }> = [
 
 DEFAULT_CITIES.forEach(({ name, lat, lon }) => createChapter(name, lat, lon));
 ScrollTrigger.refresh();
-
-// --- Hero teaser card: previews chapters[0] (the first city) ---
-
-const heroTeaserEl = document.querySelector<HTMLButtonElement>('#heroTeaser')!;
-const heroTeaserNameEl = document.querySelector<HTMLSpanElement>('#heroTeaserName')!;
-const heroTeaserTempEl = document.querySelector<HTMLSpanElement>('#heroTeaserTemp')!;
-
-function renderHeroTeaser() {
-  const firstChapter = chapters[0];
-  if (!firstChapter) return;
-  heroTeaserNameEl.textContent = firstChapter.name;
-  heroTeaserTempEl.textContent =
-    firstChapter.weather !== undefined ? `${Math.round(firstChapter.weather.temperature)}°` : '--°';
-}
-
-heroTeaserEl.addEventListener('click', () => {
-  const firstChapter = chapters[0];
-  if (firstChapter) scrollToChapter(firstChapter);
-});
-
-renderHeroTeaser();
-loadAllChapterWeather().then(renderHeroTeaser);
+loadAllChapterWeather();
 
 // --- City search (Open-Meteo Geocoding API) ---
 // Selecting a result adds a brand new pinned chapter (see createChapter)
@@ -1181,8 +1270,8 @@ function updateSearchAvailability() {
   const count = chapters.length;
   const atMax = count >= MAX_CHAPTERS;
   citySearchInput.disabled = atMax;
-  citySearchInput.placeholder = atMax ? '최대 8개 챕터까지 추가했어요' : '도시 검색 후 챕터 추가';
-  citySearchHint.textContent = `${count} / ${MAX_CHAPTERS}개 도시 챕터`;
+  citySearchInput.placeholder = atMax ? "You've reached the 8-chapter limit" : 'Search a city to add a chapter';
+  citySearchHint.textContent = `${count} / ${MAX_CHAPTERS} city chapters`;
 }
 
 function closeSearchResults() {
@@ -1352,9 +1441,12 @@ if (!isTouchDevice) {
 
 // Kicked off last, now that chapters/weather/cursor setup above have all
 // run at least once synchronously - drawFrame() reads chapters[...] and
-// module state defined throughout this file.
-if (prefersReducedMotion) {
-  drawFrame(0);
-} else {
+// module state defined throughout this file. updateFromSlider() also
+// calls drawFrame() directly under reduced motion, so its very first call
+// is deferred to here too (see the comment where it used to run, near the
+// slider's `input` listener) - that covers the reduced-motion draw, so
+// only the animation loop is still needed for the non-reduced-motion case.
+updateFromSlider();
+if (!prefersReducedMotion) {
   requestAnimationFrame(step);
 }
