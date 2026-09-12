@@ -12,23 +12,10 @@ body {
   transition: background-color 0.6s ease;
 }
 
-/*
-  Text color is a solid black/white choice driven by the measured
-  background brightness (see luminanceOf()/body.is-light in main.ts),
-  not mix-blend-mode. A blend-mode "invert against the backdrop" trick
-  was tried here, but since the background brightness interpolates
-  continuously between night and noon, it necessarily passes through
-  medium-luminance values where difference-blend contrast drops below
-  WCAG AA (measured ~3.96:1 around the dawn keyframe). Picking solid
-  black or white based on measured luminance guarantees >=4.5:1 at any
-  possible background color.
-*/
 body.is-light {
   color: #000;
 }
 
-/* Set by JS at load, removed once the intro loader has finished sliding
-   away - keeps the page from scrolling underneath the loader. */
 body.is-loading {
   overflow: hidden;
 }
@@ -62,13 +49,6 @@ p {
   z-index: -1;
 }
 
-/*
-  Shared focus ring for every interactive element on the site: a soft
-  translucent glow rather than a hard-edged rectangle. color-mix() keeps
-  it tinted to whatever currentColor already is (so it flips with
-  body.is-light automatically); browsers without color-mix() fall back to
-  a plain solid outline instead of losing the indicator entirely.
-*/
 a:focus-visible,
 button:focus-visible,
 input:focus-visible {
@@ -85,22 +65,6 @@ input:focus-visible {
   }
 }
 
-/*
-  Note: most interactive elements below reset with `all: unset`, which
-  also resets `transition` - a plain shared `button { transition: ... }`
-  rule would get overridden by their own (more specific) `all: unset`, so
-  each element declares its own transition directly instead of relying on
-  one shared rule here.
-*/
-
-/*
-  Split into two panels (rather than one full-height slab) so the reveal
-  in main.ts can slide the top half up and the bottom half down at the
-  same time - a curtain opening, not a single-direction wipe. Panel
-  background-color is copied from the current ambient body background at
-  runtime (see main.ts) rather than hardcoded, so it matches whatever
-  time-of-day tone is already active instead of introducing a new color.
-*/
 .intro-loader {
   position: fixed;
   inset: 0;
@@ -151,13 +115,6 @@ input:focus-visible {
   opacity: 0.75;
 }
 
-/*
-  The dot's own position/size never come from top/left - it stays at
-  (0,0) and every frame gets a fresh `translate3d(x, y, 0) translate(-50%,
-  -50%) scale(s)` from JS, so this rule only needs to set its resting
-  appearance. Hiding the native cursor is scoped to a class the JS adds
-  only when a custom cursor is actually running (never on touch).
-*/
 .cursor-dot {
   position: fixed;
   top: 0;
@@ -175,11 +132,6 @@ body.has-custom-cursor * {
   cursor: none !important;
 }
 
-/*
-  Fixed nav needs its own scrim now that pinned, fullscreen chapters
-  scroll directly underneath it - a plain transparent bar would lose
-  legibility against whatever color the flow field currently is.
-*/
 .site-nav {
   position: fixed;
   top: 0;
@@ -239,12 +191,6 @@ main {
   padding: 0 2rem clamp(4rem, 10vw, 8rem);
 }
 
-/*
-  Asymmetric hero: the section is a full-height positioning context
-  (relative) so the teaser card and scroll indicator can be placed
-  independently of the copy, which itself sits pinned to the bottom-left
-  via margin-top: auto rather than the old centered flex layout.
-*/
 .intro {
   position: relative;
   display: flex;
@@ -268,10 +214,6 @@ main {
   font-weight: 600;
 }
 
-/* Initial (pre-animation) state: fully masked, revealed bottom-to-top by
-   JS via a clip-path tween on each word - see wrapWordsForReveal() in
-   main.ts. Set here too so there's no flash of unclipped text before the
-   script runs. */
 .intro-title .word {
   display: inline-block;
   clip-path: inset(100% 0 0 0);
@@ -282,11 +224,6 @@ main {
   max-width: 40ch;
 }
 
-/*
-  Chapters are meant to be full-bleed, so this cancels out main's side
-  padding just for this one container; .chapter-inner re-applies its own
-  inset so the text itself doesn't touch the screen edges.
-*/
 .chapters {
   margin: 0 -2rem;
 }
@@ -328,13 +265,6 @@ main {
   opacity: 0.9;
 }
 
-/*
-  A short pinned+scrubbed beat between two chapters (see
-  createTransitionBand in main.ts) - the scrim's opacity and the
-  marquee track's x-position are both driven directly by that
-  ScrollTrigger's progress, not a free-running CSS animation, so the
-  band's pace always matches how fast the user is actually scrolling.
-*/
 .chapter-transition {
   position: relative;
   height: 40vh;
@@ -364,13 +294,6 @@ main {
   will-change: transform;
 }
 
-/*
-  -webkit-text-stroke-color can't be `currentColor` here: currentColor
-  resolves against *this element's own* `color`, which is transparent on
-  this same rule, so the stroke would resolve to transparent too. The
-  stroke color is hardcoded to match the site's white/black text-color
-  switch (see body.is-light) instead.
-*/
 .chapter-transition-word {
   display: inline-block;
   flex-shrink: 0;
@@ -592,12 +515,6 @@ input[type='range']::-moz-range-thumb:hover {
   font-size: 0.85rem;
 }
 
-/*
-  Full-bleed tinted band: position:relative + z-index:0 gives .about its
-  own stacking context, so the ::before overlay (z-index:-1 *within that
-  context*) paints in front of the fixed #flowCanvas (z-index:-1 at the
-  root) but behind .about's own text.
-*/
 .about {
   position: relative;
   z-index: 0;
@@ -680,8 +597,6 @@ input[type='range']::-moz-range-thumb:hover {
   opacity: 0.75;
 }
 
-/* The site's final, quiet note - centered and generously spaced so it
-   reads as a closing beat rather than another content section. */
 .outro {
   display: flex;
   flex-direction: column;

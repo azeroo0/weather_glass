@@ -13,14 +13,9 @@ const playButton = document.querySelector<HTMLButtonElement>('#playButton')!;
 const ctx = canvas.getContext('2d')!;
 
 const MAX_DEVICE_PIXEL_RATIO = 2;
-const MOBILE_VIEWPORT_MAX_WIDTH = 480; // matches the site's existing mobile breakpoint
+const MOBILE_VIEWPORT_MAX_WIDTH = 480;
 const MOBILE_PARTICLE_RATIO = 0.6;
 
-// All particle/flow-field math below works in CSS-pixel space
-// (0..viewWidth, 0..viewHeight). The canvas's backing store can be denser
-// (up to MAX_DEVICE_PIXEL_RATIO) for crispness on high-DPI screens, but is
-// capped so a 3x phone doesn't silently push 2.25x more pixels through
-// every fill/stroke than a capped-at-2x display would.
 let viewWidth = window.innerWidth;
 let viewHeight = window.innerHeight;
 let particleCountRatio = 1;
@@ -54,9 +49,6 @@ interface Particle {
   x: number;
   y: number;
   seed: number;
-  // Transient outward "ripple" velocity from a click/tap, added on top of
-  // whatever the flow field says this frame. Decays to 0 each frame so the
-  // particle settles back into its normal flow-field motion on its own.
   rvx: number;
   rvy: number;
 }
@@ -105,29 +97,16 @@ function formatTime(hour: number): string {
 
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// Role split: the time slider only drives day/night ambient brightness
-// (particle hue + background color keyframes above). Flow *dynamics* -
-// speed, direction bias, turbulence - come entirely from each chapter's
-// city weather, blended continuously as the user scrolls (see
-// WeatherSnapshot below).
 interface CityWeather {
   name: string;
   temperature: number;
-  windspeed: number; // km/h
-  winddirection: number; // degrees, direction the wind is blowing FROM
-  precipitation: number; // mm, last hour
-  cloudcover: number; // %
+  windspeed: number;
+  winddirection: number;
+  precipitation: number;
+  cloudcover: number;
   weathercode: number;
 }
 
-// WMO weathercode -> which "shape language" the flow field blends toward.
-// Each mode has a genuinely different physical character (background
-// gradient, particle shape, direction of travel, speed) rather than just a
-// different tint - see MODE_LOOK below. Thunderstorm reuses rain's motion
-// entirely and adds flash/shake on top (see maybeTriggerThunderFlash).
-// Rendering never snaps discretely between modes - see WeatherSnapshot's
-// modeWeights, which interpolate continuously between two cities' one-hot
-// vectors as the user scrubs through a chapter.
 type WeatherMode = 'sunny' | 'cloudy' | 'rainy' | 'thunderstorm' | 'snowy';
 type ModeWeights = [number, number, number, number, number];
 
@@ -148,12 +127,6 @@ function weatherModeFromCode(code: number): WeatherMode {
   return 'cloudy';
 }
 
-// Each mode's full physical character in one place: a top-to-bottom
-// background gradient, an edge vignette strength, particle color/opacity/
-// count, and how quickly the trail-fade wipe erases the previous frame
-// (long persistence for rain's streaks, short for everything else). These
-// are "base" colors - dayBrightnessFactor scales them for time-of-day
-// without diluting the mode's own hue.
 interface ModeLook {
   topColor: [number, number, number];
   bottomColor: [number, number, number];
@@ -212,11 +185,6 @@ const MODE_LOOK: Record<WeatherMode, ModeLook> = {
   },
 };
 
-// A fully-resolved "what the flow field should look like" for one city.
-// Every field here is a plain number/vector so two snapshots can be
-// linearly interpolated (see blendSnapshots) - that continuous blend, not
-// a fade between two rendered frames, is what makes a chapter transition
-// actually change the particles' color/shape/speed/density as you scroll.
 interface WeatherSnapshot {
   modeWeights: ModeWeights;
   flowSpeed: number;
@@ -241,8 +209,8 @@ function snapshotFromLook(mode: WeatherMode, look: ModeLook, weather: CityWeathe
 
   const flowSpeed = clamp(0.4 + windspeed * 0.05, 0.4, 3.2);
   const biasStrength = clamp(windspeed / 20, 0.15, 1.5);
-  const flowBearing = (winddirection + 180) % 360; // wind blows TOWARD this bearing
-  const biasAngle = ((flowBearing - 90) * Math.PI) / 180; // meteorological bearing -> canvas angle
+  const flowBearing = (winddirection + 180) % 360;
+  const biasAngle = ((flowBearing - 90) * Math.PI) / 180;
   const flowBias = { x: Math.cos(biasAngle) * biasStrength, y: Math.sin(biasAngle) * biasStrength };
   const flowTurbulence = clamp(precipitation * 0.15, 0, 1.2);
 
@@ -291,10 +259,6 @@ function blendSnapshots(a: WeatherSnapshot, b: WeatherSnapshot, t: number): Weat
   };
 }
 
-// Effective values for *this* frame, recomputed at the top of drawFrame()
-// from the active chapter's blend. Kept as module state (rather than
-// threaded through every function) since the cursor dot also reads them
-// outside the main particle loop.
 let flowSpeed = DEFAULT_SNAPSHOT.flowSpeed;
 let flowBias = DEFAULT_SNAPSHOT.flowBias;
 let flowTurbulence = DEFAULT_SNAPSHOT.flowTurbulence;
@@ -303,13 +267,8 @@ function scaleColor(color: [number, number, number], factor: number): [number, n
   return [color[0] * factor, color[1] * factor, color[2] * factor];
 }
 
-// The time slider no longer blends its own hue into the weather colors -
-// doing that was exactly what made every mode look like the same gray with
-// a slightly different tint. It now only scales brightness, so noon reads
-// brighter and midnight darker *within* whatever mode is showing, without
-// diluting that mode's own characteristic color.
 function dayBrightnessFactor(hour: number): number {
-  const cycle = Math.cos((2 * Math.PI * (hour - 12)) / 24); // 1 at noon, -1 at midnight
+  const cycle = Math.cos((2 * Math.PI * (hour - 12)) / 24);
   return lerp(0.55, 1.05, (cycle + 1) / 2);
 }
 
@@ -318,10 +277,6 @@ function srgbChannelToLinear(channel: number): number {
   return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
 }
 
-// WCAG relative luminance (not a naive weighted average) so the
-// black/white text switch happens exactly where contrast against white
-// and against black cross over (~0.179), guaranteeing the higher-contrast
-// choice is picked at every background color, not just most of them.
 function relativeLuminance([r, g, b]: [number, number, number]): number {
   return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) + 0.0722 * srgbChannelToLinear(b);
 }
@@ -388,10 +343,6 @@ slider.addEventListener('input', () => {
   }
   updateFromSlider();
 });
-// Not called here yet: under prefers-reduced-motion, updateFromSlider()
-// synchronously calls drawFrame(), which reads `chapters` - declared much
-// later in this file. Deferred to the bottom, after chapters/weather
-// setup has run, alongside the other post-setup kickoff calls.
 
 const fadeUpSections = document.querySelectorAll<HTMLElement>('.fade-up');
 if (prefersReducedMotion) {
@@ -412,10 +363,6 @@ if (prefersReducedMotion) {
   });
 }
 
-// Hero title reveal: split into words, each masked by its own clip-path
-// (see .intro-title .word in style.css) that starts fully hidden from the
-// bottom and sweeps upward to fully visible - a wipe, not a fade. Runs
-// once immediately on load, staggered per word.
 function wrapWordsForReveal(el: HTMLElement): HTMLElement[] {
   const words = (el.textContent ?? '').split(' ').filter(Boolean);
   el.textContent = '';
@@ -451,10 +398,7 @@ function wrapParticle(p: Particle) {
   if (p.y > viewHeight) p.y = 0;
 }
 
-// Click/tap ripple: nearby particles get a momentary outward kick, then
-// decay back to whatever the flow field is already telling them to do.
-// Disabled entirely under prefers-reduced-motion.
-const RIPPLE_RADIUS_RATIO = 0.175; // 15-20% of the smaller viewport dimension
+const RIPPLE_RADIUS_RATIO = 0.175;
 const RIPPLE_MAX_IMPULSE = 14;
 const RIPPLE_DECAY = 0.93;
 
@@ -490,12 +434,6 @@ if (!prefersReducedMotion) {
   });
 }
 
-// Continuous cursor distortion field: unlike the click ripple above, this
-// has no decay state of its own - every frame it just reads the pointer's
-// current position and pushes nearby particles outward in proportion to
-// how close they are. Move the cursor away and the push term shrinks back
-// toward 0 on its own (pure function of live distance), so particles drift
-// back into their normal flow without any bounce/spring to overshoot.
 const CURSOR_FIELD_RADIUS_RATIO = 0.12;
 const CURSOR_FIELD_STRENGTH = 1.1;
 let cursorFieldX = -Infinity;
@@ -524,11 +462,6 @@ if (!prefersReducedMotion) {
   });
 }
 
-// Weak, ambient pull toward the hero title so particles read as gathering
-// around it instead of drifting past uniformly. Scoped to the hero: it
-// fades out with window.scrollY (gone by the time the intro section's own
-// height has been scrolled past) so it never fights the chapters' weather
-// blend further down the page.
 const introEl = document.querySelector<HTMLElement>('.intro')!;
 const HERO_ATTRACTION_STRENGTH = 0.5;
 const HERO_ATTRACTION_RADIUS_RATIO = 0.6;
@@ -552,9 +485,6 @@ function applyHeroTitleAttraction(p: Particle) {
   p.y += (dy / dist) * falloff * strength;
 }
 
-// Depth layers: each frame's particle budget is split across back/mid/front
-// so the flow field reads as layers of depth rather than one flat plane -
-// back is smaller/slower/faintest, front is bigger/faster/most opaque.
 type ParticleLayer = 'back' | 'mid' | 'front';
 const PARTICLE_LAYERS: ParticleLayer[] = ['back', 'mid', 'front'];
 
@@ -580,13 +510,6 @@ function layerForIndex(index: number, count: number): ParticleLayer {
   return 'front';
 }
 
-// A particle's velocity is a weighted blend of all modes' motion formulas
-// (weights sum to ~1) rather than picking one - this is what makes a
-// chapter transition actually morph the flow field's behavior frame by
-// frame, instead of cross-fading between two finished looks. Thunderstorm
-// shares rain's velocity entirely (it only adds flash/shake on top), so
-// the two weights are combined into one "rainWeight" wherever motion or
-// shape is concerned.
 function computeBlendedVelocity(
   p: Particle,
   time: number,
@@ -598,31 +521,23 @@ function computeBlendedVelocity(
   const rainWeight = weights[2] + weights[3];
 
   if (weights[0] > 0.001) {
-    // Sunny: barely-there upward drift with a gentle sway - "중력을 거스르듯
-    // 아주 천천히 위로 부유".
     const sway = Math.sin(time * 0.3 + p.seed * Math.PI * 2) * 0.15;
     vx += weights[0] * sway * cfg.speedMul;
     vy += weights[0] * (-0.1 - flowSpeed * 0.03) * cfg.speedMul;
   }
 
   if (weights[1] > 0.001) {
-    // Cloudy: purely horizontal, no vertical motion at all - layered fog
-    // banks sliding sideways, each depth layer at its own speed.
     const direction = flowBias.x >= 0 ? 1 : -1;
     const drift = (0.5 + Math.abs(flowBias.x) * 0.7) * direction;
     vx += weights[1] * drift * cfg.speedMul;
   }
 
   if (rainWeight > 0.001) {
-    // Rain (and thunderstorm): fast, near-vertical fall with a
-    // wind-driven horizontal kick - "빠르게 아래로 떨어짐".
     vx += rainWeight * (flowBias.x * 2 + (Math.random() - 0.5) * flowTurbulence * cfg.turbulenceMul);
     vy += rainWeight * (13 + flowSpeed * 3) * cfg.speedMul;
   }
 
   if (weights[4] > 0.001) {
-    // Snow: slow fall with a wide, slow side-to-side sway - "크고 부드럽게
-    // 좌우로 살랑이며".
     const sway = Math.sin(time * 0.6 + p.seed * Math.PI * 2) * 1.1;
     vx += weights[4] * sway * cfg.speedMul;
     vy += weights[4] * (1.1 + flowSpeed * 0.25) * cfg.speedMul;
@@ -631,10 +546,6 @@ function computeBlendedVelocity(
   return { vx, vy };
 }
 
-// Batching: every particle of a given depth layer is added as a subpath of
-// that layer's single Path2D, then filled/stroked exactly once - instead
-// of a beginPath/fill (or stroke) per particle, it's at most a couple of
-// draw calls per layer no matter how many particles are on screen.
 function addCircleToPath(path: Path2D, x: number, y: number, radius: number) {
   path.moveTo(x + radius, y);
   path.arc(x, y, radius, 0, Math.PI * 2);
@@ -657,10 +568,6 @@ function strokeStreakPath(path: Path2D, color: [number, number, number], alpha: 
   ctx.globalAlpha = 1;
 }
 
-// Top-to-bottom gradient wash, painted at trailFadeAlpha (not full opacity)
-// so the previous frame's particles persist and fade rather than being
-// wiped clean every frame - this is what gives rain's streaks their trail
-// and sunny's motes their soft afterglow.
 function drawModeBackground(
   topColor: [number, number, number],
   bottomColor: [number, number, number],
@@ -675,9 +582,6 @@ function drawModeBackground(
   ctx.globalAlpha = 1;
 }
 
-// A dark radial overlay drawn fresh every frame (not trailed) so it always
-// reads as a crisp, stable vignette rather than smearing with the trail
-// wash above.
 function drawVignette(strength: number) {
   if (strength <= 0.01) return;
   const cx = viewWidth / 2;
@@ -690,11 +594,6 @@ function drawVignette(strength: number) {
   ctx.fillRect(0, 0, viewWidth, viewHeight);
 }
 
-// Rain splashes: a short-lived mark spawned wherever a rain-weighted
-// particle actually reaches the bottom edge (see drawFrame), rendered as
-// two small ticks flaring outward and fading over SPLASH_LIFETIME_MS. Kept
-// as its own tiny system rather than folded into the particle pool because
-// splashes are momentary events, not part of the continuous flow.
 interface Splash {
   x: number;
   startedAt: number;
@@ -733,11 +632,6 @@ function drawSplashes(now: number, color: [number, number, number], rainWeight: 
   ctx.globalAlpha = 1;
 }
 
-// Thunderstorm flash + shake: a random gap of 5-12s, then a sub-100ms
-// white flash immediately followed by a brief 2-3px shake of the canvas
-// element itself (the flow field keeps flowing normally underneath - only
-// the visual layer jitters). Entirely disabled under prefers-reduced-motion,
-// since a flashing screen is a textbook seizure trigger.
 let nextThunderFlashAt = prefersReducedMotion ? Infinity : performance.now() + 5000 + Math.random() * 7000;
 let thunderFlashEndAt = 0;
 let thunderShakeEndAt = 0;
@@ -817,10 +711,6 @@ function drawFrame(time: number) {
     }
     wrapParticle(p);
 
-    // Occasional per-particle "flare" - a sharp, rare spike (near 0 most
-    // of the time, briefly near 1) rather than a smooth twinkle, so it
-    // reads as a lens-flare-like flash-and-fade instead of continuous
-    // sparkle.
     const flare = Math.pow(Math.max(0, Math.sin(time * 0.15 + p.seed * 41)), 30);
     const sunnyRadius = (1 + flare * 4) * cfg.sizeMul;
     const cloudyRadius = (48 + Math.sin(p.seed * 3 + time * 0.15) * 12) * cfg.sizeMul;
@@ -892,8 +782,6 @@ function renderLastUpdated() {
 
 setInterval(renderLastUpdated, 30000);
 
-// --- Chapters: one full-screen, pinned+scrubbed section per city ---
-
 interface ChapterCity {
   name: string;
   lat: number;
@@ -905,18 +793,9 @@ interface ChapterCity {
   conditionEl: HTMLElement;
   tempValueEl: HTMLElement;
   scrollTrigger?: ScrollTrigger;
-  // Only the very first onEnter should count up from 0 - every later
-  // entry (onEnter again after leaving, or onEnterBack) just shows the
-  // resolved value immediately.
   hasPlayedTempCountUp?: boolean;
 }
 
-// Scrolling to a chapter by its section's DOM position is unreliable once
-// ScrollTrigger has pinned things (spacers get inserted, elements go
-// position:fixed) - jumping to the trigger's own computed `start` plus a
-// pixel is the position ScrollTrigger itself considers "just inside this
-// chapter", so onEnter/onUpdate reliably fire instead of landing exactly
-// on a boundary neither chapter reports as active.
 function scrollToChapter(chapter: ChapterCity) {
   const top = (chapter.scrollTrigger?.start ?? 0) + 1;
   window.scrollTo({ top, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
@@ -928,10 +807,6 @@ const chapterNavList = document.querySelector<HTMLUListElement>('#chapterNavList
 const MAX_CHAPTERS = 8;
 const chapters: ChapterCity[] = [];
 
-// Chapter 0 has no "previous" city to blend from, so drawFrame's
-// prevChapter/currentChapter both resolve to it - it renders fully
-// settled from the very first frame, matching the old page's behavior of
-// defaulting to the first city immediately on load.
 let activeChapterIndex = 0;
 let chapterProgress = 1;
 
@@ -941,18 +816,11 @@ function updateChapterNavActive() {
   });
 }
 
-// Drives only the background blend (see drawFrame's use of
-// activeChapterIndex/chapterProgress) - this runs continuously from
-// ScrollTrigger's scrub onUpdate, so it must stay free of anything that
-// should settle once and stop reacting to scroll (like the temp readout).
 function updateChapterVisuals(index: number, progress: number) {
   activeChapterIndex = index;
   chapterProgress = progress;
   updateChapterNavActive();
 
-  // The ambient rAF loop is disabled under reduced motion (see the bottom
-  // of this file), so nothing would otherwise repaint the canvas as the
-  // chapter's blend state changes - redraw once per scroll update instead.
   if (prefersReducedMotion) {
     drawFrame(0);
   }
@@ -963,10 +831,6 @@ function showChapterTemp(chapter: ChapterCity) {
   chapter.tempValueEl.textContent = String(Math.round(targetTemp));
 }
 
-// A plain (non-scrub) tween: runs once on the first real onEnter and is
-// then done, independent of however much the user scrubs back and forth
-// afterward. Every later entry - onEnter again after leaving, or
-// onEnterBack - skips straight to showChapterTemp() instead.
 function playChapterTempCountUp(chapter: ChapterCity) {
   if (chapter.hasPlayedTempCountUp) {
     showChapterTemp(chapter);
@@ -992,18 +856,8 @@ function playChapterTempCountUp(chapter: ChapterCity) {
 }
 
 const TRANSITION_MARQUEE_REPEATS = 16;
-const TRANSITION_MARQUEE_MAX_SHIFT = 30; // percent of the track's own width
+const TRANSITION_MARQUEE_MAX_SHIFT = 30;
 
-// A short pinned+scrubbed "beat" inserted right before the given city's
-// chapter (never before the very first one). The scrim's opacity and the
-// marquee track's x-position are both read straight from the
-// ScrollTrigger's own progress, so scrolling faster visibly moves the
-// marquee faster - there's no independent CSS animation running underneath.
-//
-// Appends bandEl to chaptersContainer itself (rather than letting the
-// caller do it) because ScrollTrigger's pin:true needs the element
-// already attached to the DOM when it's created - it inserts a spacer as
-// a sibling, which fails on a still-detached node.
 function createTransitionBand(nextCityName: string): HTMLElement {
   const bandEl = document.createElement('section');
   bandEl.className = 'chapter-transition';
@@ -1036,15 +890,8 @@ function createTransitionBand(nextCityName: string): HTMLElement {
         onUpdate: (self) => {
           if (!self.isActive) return;
           gsap.set(trackEl, { xPercent: -TRANSITION_MARQUEE_MAX_SHIFT * self.progress });
-          // Peaks mid-band and eases back out at both ends, so the
-          // darkening reads as one breath in and out rather than a hard cut.
           scrimEl.style.opacity = String(Math.sin(self.progress * Math.PI) * 0.35);
         },
-        // onUpdate stops firing once isActive goes false, which can leave
-        // the scrim at whatever value the last *sampled* progress was
-        // rather than a clean 0 - force it back to fully transparent on
-        // the way out in either scroll direction so no darkness lingers
-        // into the chapter on either side of the band.
         onLeave: () => {
           scrimEl.style.opacity = '0';
         },
@@ -1167,12 +1014,6 @@ async function updateCityWeatherFor(chapter: ChapterCity) {
   }
 }
 
-// --- Intro loader ---
-// Blocks the page (see body.is-loading) until the initial batch of
-// chapter weather fetches actually resolves. The percent shown is driven
-// by how many of those requests have genuinely settled - never a fake
-// timer - so slow network keeps the loader up exactly as long as the real
-// wait, and a fast one dismisses it just as quickly.
 const introLoaderEl = document.querySelector<HTMLElement>('#introLoader')!;
 const introLoaderPercentEl = document.querySelector<HTMLElement>('#introLoaderPercent')!;
 const introLoaderPanels = document.querySelectorAll<HTMLElement>('.intro-loader-panel');
@@ -1189,9 +1030,6 @@ function setIntroLoaderPercent(percent: number) {
     introLoaderPercentEl.textContent = `${target}%`;
     return;
   }
-  // Smooths the *display* between real progress steps (e.g. 0 -> 25 -> 50
-  // as each fetch settles) - the target itself is always the real ratio,
-  // this just avoids the number visibly snapping between jumps.
   gsap.to(introLoaderCounter, {
     value: target,
     duration: 0.4,
@@ -1245,10 +1083,6 @@ const DEFAULT_CITIES: Array<{ name: string; lat: number; lon: number }> = [
 DEFAULT_CITIES.forEach(({ name, lat, lon }) => createChapter(name, lat, lon));
 ScrollTrigger.refresh();
 loadAllChapterWeather();
-
-// --- City search (Open-Meteo Geocoding API) ---
-// Selecting a result adds a brand new pinned chapter (see createChapter)
-// rather than a card in a list - the whole "Right now" list is gone.
 
 const citySearchInput = document.querySelector<HTMLInputElement>('#citySearchInput')!;
 const citySearchResults = document.querySelector<HTMLUListElement>('#citySearchResults')!;
@@ -1382,9 +1216,6 @@ document.addEventListener('click', (event) => {
   }
 });
 
-// --- Custom cursor ---
-// A small dot that eases toward the pointer and picks up the current
-// blended weather tint (see drawFrame's call to updateCursorColor).
 const cursorDot = document.querySelector<HTMLDivElement>('#cursorDot')!;
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
 
@@ -1439,13 +1270,6 @@ if (!isTouchDevice) {
   }
 }
 
-// Kicked off last, now that chapters/weather/cursor setup above have all
-// run at least once synchronously - drawFrame() reads chapters[...] and
-// module state defined throughout this file. updateFromSlider() also
-// calls drawFrame() directly under reduced motion, so its very first call
-// is deferred to here too (see the comment where it used to run, near the
-// slider's `input` listener) - that covers the reduced-motion draw, so
-// only the animation loop is still needed for the non-reduced-motion case.
 updateFromSlider();
 if (!prefersReducedMotion) {
   requestAnimationFrame(step);
